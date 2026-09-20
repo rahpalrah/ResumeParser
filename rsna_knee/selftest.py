@@ -1,0 +1,252 @@
+"""
+selftest.py - runs the whole training contract on synthetic data.
+
+No competition data, no GPU, no network required (pretrained=False).  Run this
+after editing any knee_*.py; it catches shape and masking bugs in seconds
+instead of six GPU hours into step 4.
+
+    python selftest.py
+"""
+import os
+import shutil
+import tempfile
+
+import numpy as np
+import pandas as pd
+import torch
+
+import knee_common as kc
+from knee_data import KneeStudyDataset, collate, make_folds
+from knee_model import CareNet, SoftAsymmetricLoss, ModelEMA, MEDIAL_IDX, LATERAL_IDX
+
+N_STUDIES = 8
+
+
+def build_fake(tmp: str, cfg: kc.Cfg):
+    rows = []
+    rng = np.random.default_rng(0)
+    for s in range(N_STUDIES):
+        study = f"1.2.3.{s}"
+        # deliberately uneven protocols: study 3 has no axial, study 5 only one series
+        combos = [("Sagittal", 1, 1), ("Coronal", 1, 1), ("Axial", 1, 0), ("Sagittal", 0, 0)]
+        if s == 3:
+            combos = [c for c in combos if c[0] != "Axial"]
+        if s == 5:
+            combos = combos[:1]
+        for j, (plane, fluid, fat) in enumerate(combos):
+            series = f"{study}.{j}"
+            vol = rng.integers(0, 255, (cfg.n_slices, cfg.img_size, cfg.img_size), dtype=np.uint8)
+            kc.write_sprite(kc.sprite_path(tmp, study, series), vol, cfg.grid_w, cfg.jpeg_quality)
+            rows.append(dict(StudyInstanceUID=study, SeriesInstanceUID=series,
+                             Anatomical_Plane=plane, Fluid_Sensitive=fluid,
+                             Fat_Suppression=fat, Laterality=int(s % 3)))
+    series_df = pd.DataFrame(rows)
+    series_df = pd.concat([kc.assign_slots(g) for _, g in series_df.groupby("StudyInstanceUID")])
+    studies = pd.DataFrame({"StudyInstanceUID": [f"1.2.3.{s}" for s in range(N_STUDIES)]})
+    y = rng.integers(0, 2, (N_STUDIES, kc.N_LABELS)).astype(np.float32)
+    y[:, 0] = [0, 1] * (N_STUDIES // 2)          # keep at least one label balanced
+    for i, c in enumerate(kc.LABELS):
+        studies[c] = y[:, i]
+    return studies, series_df.reset_index(drop=True), y
+
+
+LEXICON_CASES = [
+    ("Complete tear of the anterior cruciate ligament. Small joint effusion.",
+     {"ACL", "Effusion"}, {"MCL", "Fracture"}),
+    ("Rotura del menisco medial. No hay derrame articular.",
+     {"Medial Meniscus"}, {"Effusion", "Lateral Meniscus"}),
+    ("Le ligament croise anterieur est intact. Dechirure du menisque lateral.",
+     {"Lateral Meniscus"}, {"ACL"}),
+    ("Kein Erguss. Riss des Innenbandes.", {"MCL"}, {"Effusion"}),
+    ("Bakerzyste in der Kniekehle. Knochenmarkodem medial tibial.",
+     {"Baker's", "Contusion"}, {"Fracture"}),
+    ("Severe patellofemoral osteoarthritis with cartilage loss. Medial compartment osteoarthritis.",
+     {"PF OA", "Medial OA"}, {"Lateral OA"}),
+    ("ACL intact. Menisci intact. No fracture. Unremarkable study.",
+     set(), {"ACL", "Fracture", "Medial Meniscus"}),
+    ("Artrosis del compartimento lateral. Sin fractura.",
+     {"Lateral OA"}, {"Fracture", "Medial OA"}),
+    ("Rottura del legamento crociato anteriore; versamento articolare.",
+     {"ACL", "Effusion"}, {"MCL"}),
+    ("Lesao do menisco medial grau III. Cisto de Baker.",
+     {"Medial Meniscus", "Baker's"}, set()),
+    ("Normal ACL. Normal MCL. Grade 2 signal in the medial meniscus.",
+     {"Medial Meniscus"}, {"ACL", "MCL"}),
+    ("Medial meniscus: posterior horn tear. Lateral meniscus: intact.",
+     {"Medial Meniscus"}, {"Lateral Meniscus"}),
+    ("The medial meniscus shows no tear.", set(), {"Medial Meniscus"}),
+    ("Impaction fracture of the lateral femoral condyle with bone marrow edema.",
+     {"Fracture", "Contusion"}, set()),
+]
+
+
+def test_lexicon():
+    """The report rules decide the teacher's floor - a leaked negation here
+    poisons every soft label downstream, so they get real cases."""
+    from knee_text import norm_text, rule_features
+    bad = []
+    for txt, must, mustnot in LEXICON_CASES:
+        f = rule_features(norm_text(txt))
+        hits = {kc.LABELS[i] for i in range(kc.N_LABELS) if f[i] > 0}
+        if not (must <= hits) or (mustnot & hits):
+            bad.append((txt, sorted(must - hits), sorted(mustnot & hits)))
+    for t, miss, extra in bad:
+        print(f"    LEXICON FAIL {t[:60]!r} missing={miss} false={extra}")
+    assert not bad, f"{len(bad)}/{len(LEXICON_CASES)} lexicon cases failed"
+    print(f"[12] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass")
+
+
+def test_train_loop(studies, series_df, y, cfg, tmp):
+    """Two optimiser steps end to end: param groups, accumulation, EMA eval,
+    checkpoint save and reload through the same path step 5 uses."""
+    import torch.utils.data as tud
+    ds = KneeStudyDataset(studies, series_df, cfg, train=True, targets=y)
+    dl = tud.DataLoader(ds, batch_size=2, shuffle=True, collate_fn=collate, num_workers=0)
+    model = CareNet(cfg)
+    lossf = SoftAsymmetricLoss()
+    ema = ModelEMA(model, 0.9)
+
+    bb = [p for n, p in model.named_parameters() if n.startswith("backbone.")]
+    hd = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
+    assert bb and hd, "param grouping found an empty group"
+    opt = torch.optim.AdamW([{"params": bb, "lr": 1e-4}, {"params": hd, "lr": 5e-4}])
+
+    before = model.head.base.weight.detach().clone()
+    for i, b in enumerate(dl):
+        o = model(b)
+        loss = lossf(o["logits"], b["target"], b["weight"])
+        loss = loss + 0.3 * (lossf(o["logit_med"], b["target"][:, MEDIAL_IDX], b["weight"]) +
+                             lossf(o["logit_lat"], b["target"][:, LATERAL_IDX], b["weight"]))
+        loss.backward()
+        opt.step(); opt.zero_grad(set_to_none=True); ema.update(model)
+        if i >= 1:
+            break
+    assert not torch.allclose(before, model.head.base.weight), "weights did not move"
+    print(f"[13] two optimiser steps ran; head weight moved by "
+          f"{(model.head.base.weight - before).abs().mean().item():.2e}")
+
+    # eval path must produce one row per study and a finite AUC
+    dl_va = tud.DataLoader(KneeStudyDataset(studies, series_df, cfg, train=False, targets=y),
+                           batch_size=2, collate_fn=collate, num_workers=0)
+    P, Y = [], []
+    ema.ema.eval()
+    with torch.no_grad():
+        for b in dl_va:
+            P.append(torch.sigmoid(ema.ema(b)["logits"]).numpy())
+            Y.append(b["target"].numpy())
+    P, Y = np.concatenate(P), np.concatenate(Y)
+    assert P.shape == (len(studies), kc.N_LABELS), P.shape
+    m, _ = kc.macro_auc(Y, P)
+    assert np.isfinite(m)
+    print(f"[14] eval produced {P.shape} predictions, macro AUC {m:.3f}")
+
+    # checkpoint round trip exactly as step 5 does it
+    ckpt = os.path.join(tmp, "ck.pt")
+    torch.save({"model": ema.ema.state_dict(), "cfg": cfg.__dict__, "fold": 0, "auc": m}, ckpt)
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    cfg2 = kc.Cfg(**{k: v for k, v in ck["cfg"].items() if k in kc.Cfg.__dataclass_fields__})
+    cfg2.pretrained = False
+    m2 = CareNet(cfg2)
+    m2.load_state_dict(ck["model"])
+    m2.eval()
+    with torch.no_grad():
+        b = next(iter(dl_va))
+        a = torch.sigmoid(ema.ema(b)["logits"])
+        c = torch.sigmoid(m2(b)["logits"])
+    assert torch.allclose(a, c, atol=1e-5), (a - c).abs().max().item()
+    print("[15] checkpoint save/reload reproduces identical predictions")
+
+
+def main():
+    tmp = tempfile.mkdtemp(prefix="kneetest_")
+    try:
+        cfg = kc.Cfg(img_size=64, n_slices=4, grid_w=2, cache_dir=tmp,
+                     backbone="resnet18", pretrained=False, embed_dim=64,
+                     slice_layers=1, study_layers=1, n_heads=4, batch_size=2)
+        kc.seed_everything(0)
+        studies, series_df, y = build_fake(tmp, cfg)
+        print(f"[1] fake cache: {len(series_df)} series / {N_STUDIES} studies")
+        print("    slot assignment:\n",
+              series_df.groupby(["Anatomical_Plane", "Fluid_Sensitive"])["slot"].apply(list).to_string())
+
+        ds = KneeStudyDataset(studies, series_df, cfg, train=True, targets=y)
+        item = ds[0]
+        assert item["image"].shape == (kc.N_SLOTS, cfg.n_slices, 3, cfg.img_size, cfg.img_size), item["image"].shape
+        print(f"[2] item image {tuple(item['image'].shape)} mask {item['series_mask'].tolist()} "
+              f"lat {int(item['lat'])}")
+
+        # a study missing a plane must mask that slot, not crash
+        i3 = ds.uids.index("1.2.3.3")
+        assert int(ds[i3]["series_mask"].sum()) < kc.N_SLOTS
+        i5 = ds.uids.index("1.2.3.5")
+        assert int(ds[i5]["series_mask"].sum()) == 1
+        print(f"[3] missing-sequence studies masked correctly "
+              f"({int(ds[i3]['series_mask'].sum())} and {int(ds[i5]['series_mask'].sum())} of {kc.N_SLOTS} slots)")
+
+        dl = torch.utils.data.DataLoader(ds, batch_size=cfg.batch_size, shuffle=True,
+                                         collate_fn=collate, num_workers=0)
+        batch = next(iter(dl))
+        model = CareNet(cfg)
+        n_par = sum(p.numel() for p in model.parameters()) / 1e6
+        out = model(batch)
+        assert out["logits"].shape == (cfg.batch_size, kc.N_LABELS), out["logits"].shape
+        assert out["logit_med"].shape == (cfg.batch_size, len(MEDIAL_IDX))
+        assert out["logit_lat"].shape == (cfg.batch_size, len(LATERAL_IDX))
+        print(f"[4] CareNet {n_par:.1f}M params -> logits {tuple(out['logits'].shape)}, "
+              f"med {tuple(out['logit_med'].shape)}, lat {tuple(out['logit_lat'].shape)}")
+
+        lossf = SoftAsymmetricLoss()
+        loss = lossf(out["logits"], batch["target"], batch["weight"])
+        loss.backward()
+        grads = [p.grad.abs().sum().item() for p in model.parameters() if p.grad is not None]
+        assert np.isfinite(loss.item()) and sum(grads) > 0
+        print(f"[5] loss {loss.item():.4f}, {len(grads)} tensors received gradient")
+
+        # soft targets must be accepted, not just 0/1
+        soft = torch.rand_like(batch["target"])
+        assert np.isfinite(lossf(out["logits"].detach(), soft).item())
+        print("[6] soft targets accepted by the loss")
+
+        ema = ModelEMA(model, 0.9)
+        ema.update(model)
+        print("[7] EMA update ok")
+
+        # mirror TTA must keep the shape and flip the laterality token cleanly
+        flipped = dict(batch)
+        flipped["image"] = torch.flip(batch["image"], dims=[-1])
+        flipped["lat"] = torch.where(batch["lat"] < 2, 1 - batch["lat"], batch["lat"])
+        with torch.no_grad():
+            o2 = model(flipped)
+        assert o2["logits"].shape == out["logits"].shape
+        print(f"[8] mirror TTA ok (lat {batch['lat'].tolist()} -> {flipped['lat'].tolist()})")
+
+        # sprite round trip must be lossless in shape and close in value
+        vol = np.tile(np.arange(cfg.img_size, dtype=np.uint8), (cfg.n_slices, cfg.img_size, 1))
+        p = os.path.join(tmp, "rt.jpg")
+        kc.write_sprite(p, vol, cfg.grid_w, 100)
+        back = kc.read_sprite(p, cfg.n_slices, cfg.img_size, cfg.grid_w)
+        assert back.shape == vol.shape
+        print(f"[9] sprite round-trip {back.shape}, mean abs err {np.abs(back.astype(int)-vol.astype(int)).mean():.2f}")
+
+        # metric + rank normalisation
+        pred = np.random.rand(50, kc.N_LABELS)
+        truth = (np.random.rand(50, kc.N_LABELS) > 0.7).astype(np.float32)
+        m, per = kc.macro_auc(truth, pred)
+        rn = kc.rank_normalise(pred)
+        m2, _ = kc.macro_auc(truth, rn)
+        assert abs(m - m2) < 1e-9, (m, m2)
+        print(f"[10] macro AUC {m:.4f}; rank-normalisation is order-preserving (delta {abs(m-m2):.2e})")
+
+        folds = make_folds(studies, 4, seed=0)
+        assert len(set(folds.tolist())) > 1
+        print(f"[11] folds {folds.tolist()}")
+
+        test_lexicon()
+        test_train_loop(studies, series_df, y, cfg, tmp)
+        print("\nALL SELF-TESTS PASSED")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()
