@@ -82,6 +82,16 @@ Open powershell in windows (run->powershell) <br />
   	],
   	}
   	
+###Evaluation SDK (`evalforge/`)###
+The repository also contains **EvalForge**, a generative-AI evaluation SDK: an API-compatible reimplementation of the Azure AI Evaluation SDK surface (evaluators, `evaluate()`, simulators, red-team scanner) with zero runtime dependencies, plus eight novel evaluation algorithms in `evalforge.novel`.<br/>
+It includes r&eacute;sum&eacute;-domain evaluators wired to this parser's JSON output (`evalforge.contrib`): `ResumeExtractionEvaluator` scores a parse against a reference with a per-field breakdown, and `ResumeFairnessProbe` audits a downstream screening model for counterfactual bias.<br/>
+
+	cd evalforge
+	PYTHONPATH=src python3 -m unittest discover -s tests
+	PYTHONPATH=src python3 examples/01_basic_evaluation.py
+
+See [evalforge/README.md](evalforge/README.md) and [evalforge/docs/NOVEL_ALGORITHMS.md](evalforge/docs/NOVEL_ALGORITHMS.md).<br/>
+
 ###Pros###
 a) Very powerful semantic parsing of resumes. I did not syntactically parse based on common styles or appearances of sections because these approaches do not scale.</br>
 b) Relies on proven grammar engines (GATE) and open source projects.<br/>

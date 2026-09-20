@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evalforge"
+version = "1.0.0"
+description = "A generative-AI evaluation SDK: an API-compatible reimplementation of the Azure AI Evaluation surface, plus eight novel evaluation algorithms."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+keywords = [
+    "evaluation", "llm", "genai", "red-teaming", "groundedness",
+    "hallucination", "fairness", "conformal-prediction", "safety",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+
+# No runtime dependencies. Every numerical routine, encoder and HTTP client is
+# implemented on the standard library, so the package installs anywhere and
+# evaluation runs are reproducible bit-for-bit across machines.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "mypy>=1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+evalforge = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
