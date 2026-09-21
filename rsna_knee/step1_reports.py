@@ -69,31 +69,54 @@ R = np.stack(train["rep"].progress_map(rule_features).values)
 rule_df = pd.DataFrame(R, columns=[f"rule_{c}" for c in kc.LABELS])
 rule_df.insert(0, "StudyInstanceUID", train["StudyInstanceUID"].values)
 rule_df.to_parquet(f"{OUT}/rule_features.parquet", index=False)
+print("saved -> rule_features.parquet")
 
-lab = train[kc.LABELS].notna().all(axis=1).values
-y = train.loc[lab, kc.LABELS].values.astype(np.float32)
-macro, per = kc.macro_auc(y, R[lab])
-print(f"\nRULE-ONLY baseline on {int(lab.sum()):,} labelled studies (this is the floor):")
+# Gold labels are sparse and may be annotated per column on different subsets,
+# so score per cell with a mask rather than restricting to complete rows.
+GOLD_M = train[kc.LABELS].notna().values.astype(np.float32)
+Y = train[kc.LABELS].fillna(0.0).values.astype(np.float32)
+
+print(f"\nstudies with >=1 gold label : {int((GOLD_M.max(axis=1) > 0).sum()):,}")
+print(f"studies with all twelve      : "
+      f"{int((GOLD_M.sum(axis=1) == kc.N_LABELS).sum()):,}")
+print("\nannotated cells per label:")
+for i, c in enumerate(kc.LABELS):
+    n = int(GOLD_M[:, i].sum())
+    pos = int(Y[GOLD_M[:, i] > 0, i].sum())
+    print(f"  {c:<18s} {n:>5} annotated, {pos:>4} positive")
+
+macro, per = kc.macro_auc(Y, R, mask=GOLD_M)
+print(f"\nRULE-ONLY baseline (the floor the teacher must beat):")
 kc.print_auc_table(macro, per)
 
 # --- CELL 3 -----------------------------------------------------------------
-# Precision matters more than recall here: the rules are a feature for the
-# transformer, and a noisy feature is worse than a sparse one.
+# Precision matters more than recall: the rules are both the teacher's training
+# target and an input feature, and a noisy target is worse than a sparse one.
 from sklearn.metrics import precision_score, recall_score
-print("per-label precision / recall / positive rate of the rules")
+print("per-label precision / recall, over annotated cells only")
+prec = {}
 for i, c in enumerate(kc.LABELS):
-    p = precision_score(y[:, i], R[lab][:, i], zero_division=0)
-    r = recall_score(y[:, i], R[lab][:, i], zero_division=0)
-    print(f"  {c:<18s} P={p:.3f} R={r:.3f}  fires {R[lab][:, i].mean():.1%}  "
-          f"true {y[:, i].mean():.1%}")
+    sel = GOLD_M[:, i] > 0
+    if sel.sum() == 0:
+        print(f"  {c:<18s} no annotated cells")
+        continue
+    p = precision_score(Y[sel, i], R[sel, i], zero_division=0)
+    r = recall_score(Y[sel, i], R[sel, i], zero_division=0)
+    prec[c] = p
+    print(f"  {c:<18s} P={p:.3f} R={r:.3f}  fires {R[sel, i].mean():.1%} "
+          f"of annotated, {R[:, i].mean():.1%} of all 4,407  true {Y[sel, i].mean():.1%}")
 
-# Any label where precision is below ~0.6 is a lexicon bug, not a hard label.
-# Print a few misfires and extend ANATOMY / ABNORMAL in knee_text.py.
-worst = min(range(kc.N_LABELS),
-            key=lambda i: precision_score(y[:, i], R[lab][:, i], zero_division=1))
-print(f"\nworst-precision label: {kc.LABELS[worst]} - three false positives:")
-fp = np.where((R[lab][:, worst] == 1) & (y[:, worst] == 0))[0][:3]
-for j in fp:
-    print("   ...", train.loc[lab].iloc[j]["rep"][:300], "\n")
-
-print("saved -> rule_features.parquet")
+# A label below ~0.6 precision is a lexicon bug, not a hard label.  These are
+# the reports to read before editing knee_text.py.
+if prec:
+    worst = min(prec, key=prec.get)
+    wi = kc.LABELS.index(worst)
+    sel = GOLD_M[:, wi] > 0
+    print(f"\nworst precision: {worst} ({prec[worst]:.3f}) - false positives:")
+    fp = np.where(sel & (R[:, wi] == 1) & (Y[:, wi] == 0))[0][:3]
+    for j in fp:
+        print("   ...", train.iloc[j]["rep"][:300], "\n")
+    print(f"missed positives ({worst}):")
+    fn = np.where(sel & (R[:, wi] == 0) & (Y[:, wi] == 1))[0][:3]
+    for j in fn:
+        print("   ...", train.iloc[j]["rep"][:300], "\n")
