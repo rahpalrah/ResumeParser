@@ -4,21 +4,16 @@
 # =============================================================================
 
 # --- CELL 1 -----------------------------------------------------------------
-# Write the shared modules next to the notebook.  Every later step re-uses
-# exactly these files, including the offline submission notebook, so keep them
-# in one Kaggle Dataset (see README, "Packaging the code").
-#
-#   %%writefile knee_common.py
-#   <paste knee_common.py here>
-#
-# Or, with internet on:
-#   !git clone -q https://github.com/rahpalrah/ResumeParser /kaggle/working/repo \
-#       && cp /kaggle/working/repo/rsna_knee/knee_*.py /kaggle/working/
+# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
+# unpredictable folder name, so find it by content rather than by name.
+import os, sys, glob
+_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
+assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
+CODE_DIR = os.path.dirname(_c[0])
+sys.path.insert(0, CODE_DIR)
+print("code from:", CODE_DIR)
 
-# --- CELL 2 -----------------------------------------------------------------
-import os, sys, glob, time
-sys.path.insert(0, "/kaggle/working")
-
+import time
 import numpy as np, pandas as pd, torch
 import knee_common as kc
 

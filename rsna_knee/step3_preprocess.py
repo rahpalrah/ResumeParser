@@ -15,8 +15,16 @@
 # --- CELL 1 -----------------------------------------------------------------
 # !pip install -q pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm
 
-import os, sys, time, math, glob, json, traceback
-sys.path.insert(0, "/kaggle/working")
+# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
+# unpredictable folder name, so find it by content rather than by name.
+import os, sys, glob
+_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
+assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
+CODE_DIR = os.path.dirname(_c[0])
+sys.path.insert(0, CODE_DIR)
+print("code from:", CODE_DIR)
+
+import time, math, json, traceback
 import numpy as np, pandas as pd
 from multiprocessing import Pool
 import knee_common as kc

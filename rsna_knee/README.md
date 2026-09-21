@@ -3,9 +3,9 @@
 A complete, Kaggle-GPU-only pipeline for the RSNA Knee Abnormalities Detection
 competition (12 binary findings per study, macro AUC-ROC).
 
-Everything here is written to run inside Kaggle notebooks. Nothing in this repo
-runs the competition data locally — the dataset is 570 GB and lives only on
-Kaggle.
+**Everything runs on Kaggle.** You need no machine of your own — not even to
+get this code onto Kaggle. Step 00 clones this repo from inside a Kaggle
+notebook and hands every later step the modules and the offline pip wheels.
 
 ---
 
@@ -66,7 +66,8 @@ the "expected output" below, stop and fix it before spending GPU hours.
 | `knee_model.py` | CARE-Net, asymmetric soft-target loss, weight EMA |
 | `knee_data.py` | study-level dataset, augmentation, multi-label folds |
 | `knee_text.py` | multilingual report lexicon (clause-scoped, negation-aware) |
-| `selftest.py` | 15 checks on synthetic data — run after editing any module |
+| `selftest.py` | 15 checks on synthetic data — run by step 00 |
+| `step00_bootstrap.py` | clones the repo on Kaggle, self-tests, downloads wheels |
 | `step0_setup.py` | environment + data sanity check |
 | `step1_reports.py` | multilingual rule lexicon over the reports |
 | `step2_text_teacher.py` | XLM-R report teacher → soft labels for every study |
@@ -77,11 +78,11 @@ the "expected output" below, stop and fix it before spending GPU hours.
 Each `stepN_*.py` is a notebook written as `# --- CELL n ---` blocks. Paste one
 block per Kaggle cell.
 
-Before uploading anything, run `python selftest.py` locally (CPU, ~30 s, needs
-only numpy/pandas/opencv/torch/timm). It builds a fake sprite cache, runs the
-dataset, the model, the loss, the EMA, the mirror TTA, two optimiser steps, a
-checkpoint round trip, the metric, and the report lexicon. It catches shape and
-masking bugs in seconds instead of six GPU hours into step 4:
+Step 00 runs `selftest.py` for you on Kaggle (CPU, ~30 s). It builds a fake
+sprite cache, runs the dataset, the model, the loss, the EMA, the mirror TTA,
+two optimiser steps, a checkpoint round trip, the metric, and the report
+lexicon. It catches shape and masking bugs in seconds instead of six GPU hours
+into step 4:
 
 ```
 [1] fake cache: 28 series / 8 studies
@@ -92,32 +93,86 @@ masking bugs in seconds instead of six GPU hours into step 4:
 ALL SELF-TESTS PASSED
 ```
 
-## 3. Packaging the code for Kaggle
+## 2b. Run order at a glance
 
-Do this once, and re-do it whenever you edit a `knee_*.py`.
+Eight notebooks, all on Kaggle. Nothing runs anywhere else.
 
-1. On your machine: `git clone https://github.com/rahpalrah/ResumeParser`
-2. Create a Kaggle Dataset named **`knee-code`** containing just
-   `knee_common.py`, `knee_model.py`, `knee_data.py`.
-3. In any notebook with internet ON you can skip the dataset and use:
-   ```python
-   !git clone -q https://github.com/rahpalrah/ResumeParser /kaggle/working/repo
-   !cp /kaggle/working/repo/rsna_knee/knee_*.py /kaggle/working/
-   ```
-   The submission notebook has internet OFF, so it must use the dataset.
-4. Create a Kaggle Dataset **`knee-wheels`** for the offline notebook:
-   ```bash
-   pip download pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm -d wheels/
-   ```
-   Upload `wheels/`.
+| # | notebook | accelerator | internet | runs | gate before moving on |
+|---|---|---|---|---|---|
+| 00 | `step00_bootstrap.py` | CPU | ON | 1× | `ALL SELF-TESTS PASSED`, 5 decoders `OK` |
+| 0 | `step0_setup.py` | GPU | ON | 1× | `volume (16, 256, 256) uint8` — not `None` |
+| 1 | `step1_reports.py` | CPU | ON | 1× | rule macro AUC ≥ 0.75, no label P < 0.6 |
+| 2 | `step2_text_teacher.py` | GPU | ON | 1× | teacher OOF macro AUC ≥ 0.95 |
+| 3 | `step3_preprocess.py` | CPU | ON | 8× (`SHARD`) + 1× (`SPLIT="test"`) | `failures: 0`, unknown laterality < 30% |
+| 4 | `step4_train.py` | GPU | ON | 5× (`FOLD`) | stage A ep0 > 0.75; stage B beats stage A |
+| 5 | `step5_submit.py` | GPU | **OFF** | per submission | `wrote submission.csv (1300, 13)` |
+
+Only two variables are ever edited by hand: `SHARD` in step 3 and `FOLD` in
+step 4.
+
+## 3. How the notebooks find each other
+
+Every notebook locates its inputs by **globbing for a filename**, never by a
+dataset name:
+
+```python
+glob.glob("/kaggle/input/*/knee_common.py")        # the code, from step 00
+glob.glob("/kaggle/input/*/study_targets.parquet") # the targets, from step 2
+glob.glob("/kaggle/input/*/cache")                 # the sprites, from step 3
+glob.glob("/kaggle/input/*/carenet_f*.pt")         # the weights, from step 4
+```
+
+So you never have to name a dataset exactly right. Attach a previous
+notebook's output with **Add Data → Your Work → Notebook Output** and it is
+found. If a required input is missing the notebook raises an `assert` with the
+name of the step to run, rather than failing halfway through.
+
+Each step ends with **Save Version → Save & Run All (Commit)**, which turns its
+output into something the next step can attach.
+
+Editing the code later: change the file in GitHub, re-run step 00, and re-attach
+its newer output. Nothing else changes.
 
 ---
 
 # The steps
 
+## STEP 00 — bootstrap (CPU, ~3 min, internet ON)
+
+New notebook, internet ON, no data attached. Run `step00_bootstrap.py`. It
+clones this repo, copies the modules into `/kaggle/working`, runs the self-test,
+and downloads the DICOM-decoder wheels that step 5 will need with no network.
+
+**Expected output:**
+
+```
+copied knee_common.py
+copied knee_data.py
+copied knee_model.py
+copied knee_text.py
+...
+[13] two optimiser steps ran; head weight moved by 7.13e-04
+[14] eval produced (8, 12) predictions, macro AUC 0.602
+[15] checkpoint save/reload reproduces identical predictions
+ALL SELF-TESTS PASSED
+
+17 wheels, 41.3 MiB
+offline decoder check:
+  OK   pydicom
+  OK   pylibjpeg
+  OK   libjpeg
+  OK   openjpeg
+  OK   gdcm
+BOOTSTRAP COMPLETE.
+```
+
+**Gate:** `ALL SELF-TESTS PASSED`, and all five decoders `OK`. If the self-test
+fails, stop — every later step inherits the same modules. Then Save Version.
+
 ## STEP 0 — sanity check (GPU, ~5 min, internet ON)
 
-Run `step0_setup.py`. It prints the GPU, checks the DICOM decoders, summarises
+Attach the competition data and the step-00 output. Run `step0_setup.py`. It
+prints the GPU, checks the DICOM decoders, summarises
 the CSVs, and — the important part — times one full series read so you can size
 step 3.
 

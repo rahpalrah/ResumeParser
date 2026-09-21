@@ -12,8 +12,16 @@
 
 # --- CELL 1 -----------------------------------------------------------------
 # !pip install -q timm iterative-stratification
-import os, sys, gc, math, time, json
-sys.path.insert(0, "/kaggle/working")
+# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
+# unpredictable folder name, so find it by content rather than by name.
+import os, sys, glob
+_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
+assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
+CODE_DIR = os.path.dirname(_c[0])
+sys.path.insert(0, CODE_DIR)
+print("code from:", CODE_DIR)
+
+import gc, math, time, json
 import numpy as np, pandas as pd, torch, torch.nn as nn
 from torch.utils.data import DataLoader
 import knee_common as kc
@@ -22,10 +30,13 @@ from knee_model import CareNet, SoftAsymmetricLoss, ModelEMA
 
 COMP = "/kaggle/input/rsna-knee-abnormalities-detection"
 OUT = "/kaggle/working"
-# every step-3 shard you saved, attached as a dataset
-CACHE_DIRS = sorted(__import__("glob").glob("/kaggle/input/*/cache"))
+# Every attached step-3 shard, plus the step-2 targets.  All located by content
+# so the notebook does not care what the attached outputs are named.
+CACHE_DIRS = sorted(glob.glob("/kaggle/input/*/cache"))
 META_GLOB = "/kaggle/input/*/series_meta_train_shard*.parquet"
-TARGETS = "/kaggle/input/knee-text-teacher/study_targets.parquet"
+_t = glob.glob("/kaggle/input/*/study_targets.parquet")
+assert _t, "Attach the step-2 notebook output (study_targets.parquet)"
+TARGETS = _t[0]
 
 FOLD = 0                       # <-- CHANGE per run
 EFFICIENCY = False             # True -> the small config for the efficiency track
@@ -35,9 +46,10 @@ kc.seed_everything(CFG.seed + FOLD)
 DEV = "cuda"
 
 # --- CELL 2 -----------------------------------------------------------------
-import glob as _glob
-meta = pd.concat([pd.read_parquet(p) for p in sorted(_glob.glob(META_GLOB))],
-                 ignore_index=True)
+_shards = sorted(glob.glob(META_GLOB))
+assert _shards, "Attach the step-3 shard outputs"
+print(f"{len(_shards)} shard manifests")
+meta = pd.concat([pd.read_parquet(p) for p in _shards], ignore_index=True)
 meta = meta[meta["ok"] == 1].drop_duplicates("SeriesInstanceUID").reset_index(drop=True)
 print(f"cached series: {len(meta):,} over {meta.StudyInstanceUID.nunique():,} studies")
 

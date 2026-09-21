@@ -13,8 +13,16 @@
 
 # --- CELL 1 -----------------------------------------------------------------
 # !pip install -q iterative-stratification
-import os, sys, gc, math, time
-sys.path.insert(0, "/kaggle/working")
+# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
+# unpredictable folder name, so find it by content rather than by name.
+import os, sys, glob
+_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
+assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
+CODE_DIR = os.path.dirname(_c[0])
+sys.path.insert(0, CODE_DIR)
+print("code from:", CODE_DIR)
+
+import gc, math, time
 import numpy as np, pandas as pd, torch, torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel, get_cosine_schedule_with_warmup
@@ -33,7 +41,10 @@ DEV = "cuda"
 kc.seed_everything(42)
 
 train = pd.read_csv(f"{COMP}/train.csv")
-rules = pd.read_parquet(f"{OUT}/rule_features.parquet")
+_r = glob.glob("/kaggle/input/*/rule_features.parquet") + [f"{OUT}/rule_features.parquet"]
+_r = [p for p in _r if os.path.exists(p)]
+assert _r, "Attach the step-1 notebook output (rule_features.parquet)"
+rules = pd.read_parquet(_r[0])
 train = train.merge(rules, on="StudyInstanceUID", how="left")
 rule_cols = [f"rule_{c}" for c in kc.LABELS]
 train[rule_cols] = train[rule_cols].fillna(0.0)

@@ -12,10 +12,23 @@
 # =============================================================================
 
 # --- CELL 1 -----------------------------------------------------------------
-# !pip install -q --no-index --find-links=/kaggle/input/knee-wheels \
-#     pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm
-import os, sys, glob, time, math
-sys.path.insert(0, "/kaggle/input/knee-code")        # knee_common / model / data
+# Run this in a cell of its own, FIRST (the wheels ride along with the code
+# from step 00, so no network is needed):
+#
+#   import glob
+#   W = glob.glob("/kaggle/input/*/wheels")[0]
+#   !pip install -q --no-index --find-links={W} \
+#       pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm
+# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
+# unpredictable folder name, so find it by content rather than by name.
+import os, sys, glob
+_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
+assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
+CODE_DIR = os.path.dirname(_c[0])
+sys.path.insert(0, CODE_DIR)
+print("code from:", CODE_DIR)
+
+import time, math
 import numpy as np, pandas as pd, torch
 from torch.utils.data import Dataset, DataLoader
 import knee_common as kc
@@ -24,7 +37,8 @@ from knee_data import _to_25d, collate
 from knee_model import CareNet
 
 COMP = "/kaggle/input/rsna-knee-abnormalities-detection"
-CKPTS = sorted(glob.glob("/kaggle/input/knee-carenet/carenet_f*.pt"))
+CKPTS = sorted(glob.glob("/kaggle/input/*/carenet_f*.pt"))
+assert CKPTS, "Attach the step-4 notebook outputs (carenet_f*.pt)"
 DEV = "cuda"
 USE_TTA = True
 T_BUDGET_S = 7.5 * 3600      # leave headroom inside the 9 h cap
