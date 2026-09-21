@@ -52,6 +52,13 @@ _CHAR_MAP = str.maketrans({
     "ı": "i",   # Turkish dotless i - the one that matters most here
     "ł": "l", "ø": "o", "đ": "d", "ð": "d",
     "ß": "ss", "æ": "ae", "œ": "oe", "þ": "th",
+    # Look-alikes that are not the letter they appear to be. One site writes
+    # Greek reports with U+2206 INCREMENT for capital delta, so "∆εν" - the
+    # word for "not" - is not δεν to any pattern, and every negation in those
+    # reports was silently missed.
+    "\u2206": "δ",   # INCREMENT -> delta
+    "\u2126": "ω",   # OHM SIGN -> omega
+    "\u00b5": "μ",   # MICRO SIGN -> mu
 })
 
 ANATOMY = {
@@ -374,3 +381,42 @@ def rule_features(text: str) -> np.ndarray:
         else:
             f[i] = window_hit(text, anat, ABNORMAL, label=lab, spans=spans)
     return f
+
+# --------------------------------------------------------------------------- #
+# Knee side from the report
+# --------------------------------------------------------------------------- #
+# The DICOM headers of ~48% of studies carry no Laterality tag at all - it is
+# absent from the allowlisted set for those sites, not merely empty. The
+# reports name the side in their opening line almost every time, so for
+# TRAINING the side is recoverable even where the pixels' metadata lost it.
+# The test set has no reports, which is fine: the compartment branch is gated
+# per study, so a test study with no side simply falls back to the main head.
+# More sides at training time means that branch is better trained for the
+# studies at test time that do have one.
+
+RIGHT_KNEE = (r"(right knee|knee right|\brt knee\b|rodilla derecha|joelho direito|"
+              r"genou droit|rechtes knie|knie rechts|rechter knie|ginocchio destro|"
+              r"sag diz|desno koljeno|desnog koljena|"
+              r"дясн\w* колян\w*|дясн\w* коляно|δεξι\w* γονατ\w*)")
+LEFT_KNEE = (r"(left knee|knee left|\blt knee\b|rodilla izquierda|joelho esquerdo|"
+             r"genou gauche|linkes knie|knie links|linker knie|ginocchio sinistro|"
+             r"sol diz|lijevo koljeno|lijevog koljena|"
+             r"ляв\w* колян\w*|ляв\w* коляно|αριστερ\w* γονατ\w*)")
+
+
+def laterality_from_report(text: str) -> int:
+    """0 left, 1 right, 2 unknown - from an already normalised report.
+
+    Ambiguous reports (both sides named, or neither) return unknown rather than
+    a guess: a wrong side is worse than no side, since it feeds the medial head
+    lateral anatomy.
+    """
+    r = re.search(RIGHT_KNEE, text)
+    l = re.search(LEFT_KNEE, text)
+    if r and not l:
+        return 1
+    if l and not r:
+        return 0
+    if r and l:                      # both named - take whichever comes first
+        return 1 if r.start() < l.start() else 0
+    return 2

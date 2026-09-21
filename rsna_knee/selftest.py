@@ -235,6 +235,29 @@ def test_lexicon():
     for t, miss, extra in bad:
         print(f"    LEXICON FAIL {t[:60]!r} missing={miss} false={extra}")
     assert not bad, f"{len(bad)}/{len(LEXICON_CASES)} lexicon cases failed"
+    # Knee side from the report: the DICOM carries none for ~48% of studies.
+    from knee_text import laterality_from_report as _lat
+    side_cases = [
+        ("мр находка: дясната колянна става", 1),
+        ("мр: лявата колянна става", 0),
+        ("μαγνητικη τομογραφια ∆εξιου γονατος", 1),
+        ("sol diz mrg. tetkik protokolu", 0),
+        ("sag diz mrg. bulgular", 1),
+        ("mr knie rechts 15ch aa", 1),
+        ("mri of left knee with -locator", 0),
+        ("findings: small joint effusion", 2),
+    ]
+    for _txt, _want in side_cases:
+        _got = _lat(norm_text(_txt))
+        assert _got == _want, f"side {_got} != {_want} for {_txt[:40]!r}"
+    # U+2206 INCREMENT is a maths symbol, not capital delta. One site writes
+    # its Greek reports with it, so "not" reads as ∆εν and every Greek negation
+    # was missed until norm_text mapped it.
+    assert norm_text("∆εν") == "δεν", "INCREMENT was not mapped to delta"
+    print(f"[13c] knee side from report: {len(side_cases)}/{len(side_cases)} cases; "
+          f"INCREMENT delta normalised")
+
+
     print(f"[14] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass "
           f"(en/es/pt/fr/de/it/tr/bg/el/hr); no unnormalised pattern characters")
 
@@ -361,6 +384,27 @@ def main():
         with torch.no_grad():
             o2 = model(flipped)
         assert o2["logits"].shape == out["logits"].shape
+        # The compartment branch must switch OFF when the side is unknown: with
+        # ~48% of studies carrying no laterality, a coin-flip half-to-compartment
+        # mapping trains the medial head on lateral anatomy.
+        model.eval()          # dropout would make two forward passes differ
+        b_known = dict(batch); b_known["lat"] = torch.zeros_like(batch["lat"])
+        b_unk = dict(batch); b_unk["lat"] = torch.full_like(batch["lat"], 2)
+        with torch.no_grad():
+            o_known, o_unk = model(b_known), model(b_unk)
+        assert o_known["comp_valid"].sum() == len(batch["lat"])
+        assert o_unk["comp_valid"].sum() == 0
+        # with the side unknown the compartment logits must not reach the output
+        with torch.no_grad():
+            base = model(b_unk)["logits"][:, MEDIAL_IDX]
+            model.comp_mix.data.fill_(5.0)        # force the mix wide open
+            still = model(b_unk)["logits"][:, MEDIAL_IDX]
+            model.comp_mix.data.fill_(0.0)
+        assert torch.allclose(base, still, atol=1e-5), \
+            "compartment branch still influences an unknown-side study"
+        model.train()
+        print("[7b] compartment branch is inert when laterality is unknown")
+
         print(f"[8] mirror TTA ok (lat {batch['lat'].tolist()} -> {flipped['lat'].tolist()})")
 
         # sprite round trip must be lossless in shape and close in value

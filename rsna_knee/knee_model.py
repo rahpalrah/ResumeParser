@@ -212,10 +212,22 @@ class CareNet(nn.Module):
             out["logit_med"] = self.head_med(f_med)
             out["logit_lat"] = self.head_lat(f_lat)
 
-            mix = torch.sigmoid(self.comp_mix)
+            # The branch is only meaningful when the knee side is known. With an
+            # unknown side there is no defensible mapping from image half to
+            # compartment, and the previous code silently took flip=False -
+            # calling the image-left half medial for every one of them. About
+            # half of those are left knees, so it was training the medial head
+            # on lateral anatomy for a quarter of the corpus: a wrong signal,
+            # not a missing one, and precisely what collapses Medial OA and
+            # Lateral OA into the same predictor.
+            known = (batch["lat"] != 2).float().unsqueeze(-1)      # (B,1)
+            out["comp_valid"] = known.squeeze(-1)
+            mix = torch.sigmoid(self.comp_mix) * known
             adj = logits.clone()
-            adj[:, MEDIAL_IDX] = (1 - mix) * logits[:, MEDIAL_IDX] + mix * out["logit_med"]
-            adj[:, LATERAL_IDX] = (1 - mix) * logits[:, LATERAL_IDX] + mix * out["logit_lat"]
+            adj[:, MEDIAL_IDX] = ((1 - mix) * logits[:, MEDIAL_IDX]
+                                  + mix * out["logit_med"])
+            adj[:, LATERAL_IDX] = ((1 - mix) * logits[:, LATERAL_IDX]
+                                   + mix * out["logit_lat"])
             logits = adj
 
         out["logits"] = logits

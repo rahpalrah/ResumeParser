@@ -118,6 +118,27 @@ import knee_data as kd
 kd.sprite_path = kc.sprite_path
 print("cache roots:", _mc.roots)
 
+# The DICOM headers of ~48% of studies carry no Laterality tag - the
+# diagnostic confirmed it is absent from the allowlisted set, not empty. The
+# reports name the side, so recover it for TRAINING. The test set has no
+# reports and keeps whatever its headers give; that is not a mismatch, because
+# the compartment branch is gated per study and simply falls back to the main
+# head when the side is unknown. More sides at training time means the branch
+# is better trained for the test studies that do have one.
+from knee_text import norm_text, laterality_from_report
+_rep = pd.read_csv(f"{COMP}/train.csv", usecols=["StudyInstanceUID", "Report"])
+_rep["lat_report"] = _rep["Report"].map(lambda t: laterality_from_report(norm_text(t)))
+_lat = dict(zip(_rep["StudyInstanceUID"], _rep["lat_report"]))
+
+_before = meta.groupby("StudyInstanceUID")["Laterality"].apply(
+    lambda v: int(all(x == 2 for x in v))).mean()
+_fill = meta["StudyInstanceUID"].map(_lat).fillna(2).astype(int)
+meta["Laterality"] = np.where(meta["Laterality"] == 2, _fill, meta["Laterality"])
+_after = meta.groupby("StudyInstanceUID")["Laterality"].apply(
+    lambda v: int(all(x == 2 for x in v))).mean()
+print(f"laterality unknown: {_before:.1%} of studies from DICOM -> {_after:.1%} "
+      f"after reading the reports")
+
 targets = pd.read_parquet(TARGETS)
 targets = targets[targets["StudyInstanceUID"].isin(set(meta["StudyInstanceUID"]))]
 targets = targets.reset_index(drop=True)
@@ -210,9 +231,16 @@ def train_stage(name, loader, epochs, lr_scale=1.0):
                 o = model(x)
                 loss = lossf(o["logits"], x["target"], x["weight"])
                 if "logit_med" in o:   # deep supervision on the compartment branch
+                    # Only on studies whose side is known: the halves carry no
+                    # compartment meaning otherwise, and supervising them there
+                    # teaches the medial head lateral anatomy.
+                    cw = o["comp_valid"].unsqueeze(-1)
+                    w = x["weight"] if x["weight"].dim() == 2 else x["weight"].view(-1, 1)
                     loss = loss + 0.3 * (
-                        lossf(o["logit_med"], x["target"][:, MEDIAL_IDX], x["weight"]) +
-                        lossf(o["logit_lat"], x["target"][:, LATERAL_IDX], x["weight"]))
+                        lossf(o["logit_med"], x["target"][:, MEDIAL_IDX],
+                              w[:, :1] * cw) +
+                        lossf(o["logit_lat"], x["target"][:, LATERAL_IDX],
+                              w[:, :1] * cw))
                 loss = loss / CFG.accum
             scaler.scale(loss).backward()
             run += loss.item() * CFG.accum
