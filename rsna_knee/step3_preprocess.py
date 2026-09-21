@@ -7,9 +7,9 @@
 # n_slices sampled slices in a grid.  The whole training set collapses to a few
 # GB that fits in a Kaggle Dataset and loads in ~2 ms per series.
 #
-# Run this notebook NUM_SHARDS times, changing SHARD each run, then "Save
-# Version" each run so each output becomes its own dataset.  Attach all shards
-# to the training notebook.
+# One run at the measured throughput. If you do raise NUM_SHARDS, run the
+# notebook once per shard changing SHARD, Save Version each time, and attach
+# every shard output to step 4 - it globs for them.
 # =============================================================================
 
 # --- CELL 1 -----------------------------------------------------------------
@@ -72,10 +72,14 @@ COMP = kc.find_comp_dir()          # autodetected: never hard-code the slug
 print("competition data:", COMP)
 OUT = "/kaggle/working"
 
-SHARD = 0            # <-- CHANGE THIS each run: 0,1,2,...,NUM_SHARDS-1
-NUM_SHARDS = 2       # step 0 measured ~1 h total on 4 procs, so 2 runs of ~25
-                     # min each. Raise it only if step 0 projects over ~11 h.
-SPLIT = "train"      # "train" or "test"
+# Sharding exists for the 12 h notebook limit, and step 0 measured the whole
+# job at ~1 h on 4 procs - and this step only decodes the ~17,600 slot-assigned
+# series, not all 24,371. One shard fits with hours to spare, so one run it is.
+# Raise NUM_SHARDS only if C3's ETA projects past ~10 h.
+SHARD = 0
+NUM_SHARDS = 1
+SPLIT = "train"      # "test" is NOT needed: step 5 decodes DICOM directly and
+                     # never reads a sprite cache.
 N_PROC = 4           # Kaggle CPU notebooks expose 4 vCPU
 
 CFG = kc.Cfg(comp_dir=COMP, cache_dir=f"{OUT}/cache")

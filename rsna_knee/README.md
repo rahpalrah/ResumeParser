@@ -114,7 +114,7 @@ Eight notebooks, all on Kaggle. Nothing runs anywhere else.
 | 0 | `step0_setup.py` | GPU | ON | 1× | `volume (16, 256, 256) uint8` — not `None` |
 | 1 | `step1_reports.py` | CPU | ON | 1× | rule macro AUC ≥ 0.75, no label P < 0.6 |
 | 2 | `step2_text_teacher.py` | GPU | ON | 1× | teacher gold AUC **beats** rules-alone |
-| 3 | `step3_preprocess.py` | CPU | ON | 2× (`SHARD`) + 1× (`SPLIT="test"`) | `failures: 0`, unknown laterality < 30% |
+| 3 | `step3_preprocess.py` | CPU | ON | 1× | `failures: 0`, unknown laterality < 30% |
 | 4 | `step4_train.py` | GPU | ON | 5× (`FOLD`) | select AUC > 0.75; gold AUC rising with it |
 | 5 | `step5_submit.py` | GPU | **OFF** | per submission | `wrote submission.csv (1300, 13)` |
 
@@ -349,9 +349,9 @@ Publish the output; step 4 finds `study_targets.parquet` by glob.
 
 ## STEP 3 — build the sprite cache (CPU 12 h notebook, internet ON)
 
-Run `step3_preprocess.py` **once per shard**, changing `SHARD` from 0 to
-`NUM_SHARDS-1`. Step 0 measured ~1 h of total work, so `NUM_SHARDS = 2` is
-plenty — about 25 minutes per run. Each run decodes its slice of the series list and writes one
+Run `step3_preprocess.py` **once**. Step 0 measured the whole job at ~1 h on
+4 procs, and this step decodes only the ~17,600 slot-assigned series, so a
+single shard finishes inside the 12 h limit with hours to spare. Each run decodes its slice of the series list and writes one
 JPEG per series. Save a version after each run; each output becomes a dataset.
 
 Only series that win one of the four slots are decoded, so roughly a third of
@@ -377,8 +377,8 @@ round-trip: (16, 256, 256) uint8 min 0 max 255
   has an unknown token) but the compartment branch loses power.
 - The displayed slices must look like knee MRI, not noise or all-black.
 
-Set `SPLIT = "test"` and run one more time to cache the three example test
-studies — useful for debugging step 5 quickly.
+There is no `SPLIT = "test"` pass. Step 5 decodes DICOM directly and never
+reads a sprite cache, so caching the test split would be dead work.
 
 ## STEP 4 — train CARE-Net (GPU, ~7 h per fold, internet ON)
 
