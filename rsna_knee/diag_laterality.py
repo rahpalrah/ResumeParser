@@ -42,7 +42,6 @@ def one_header(study):
 present = collections.Counter()
 side_hint = collections.Counter()
 values = collections.defaultdict(collections.Counter)
-SIDE = ("LEFT", "RIGHT", "\bL\b", "\bR\b", "LT", "RT")
 for study in unknown[:N_STUDIES]:
     ds = one_header(study)
     if ds is None:
