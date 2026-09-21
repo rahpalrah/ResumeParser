@@ -1,40 +1,48 @@
 # =============================================================================
-# STEP 3 - build the sprite cache.                 Kaggle notebook, CPU (12 h).
-# Internet: ON (only to install DICOM decoders).   Runtime: see step 0 estimate.
+# STEP 3 - build the sprite cache.          ONE CELL. Kaggle notebook, CPU.
+# Internet: ON (to install the DICOM decoders).   Runtime: ~45 min, measured.
 #
-# 570 GB of DICOM cannot be read once per epoch.  This step reads every series
-# exactly once and writes it as ONE grayscale JPEG "sprite sheet" holding the
-# n_slices sampled slices in a grid.  The whole training set collapses to a few
-# GB that fits in a Kaggle Dataset and loads in ~2 ms per series.
+# 570 GB of DICOM cannot be read once per epoch. This reads every series that
+# wins a slot exactly once and writes it as ONE grayscale JPEG "sprite sheet"
+# holding the sampled slices in a grid, collapsing the training set to ~5 GiB
+# that loads in ~2 ms per series.
 #
-# One run at the measured throughput. If you do raise NUM_SHARDS, run the
-# notebook once per shard changing SHARD, Save Version each time, and attach
-# every shard output to step 4 - it globs for them.
+# Everything is automatic: it installs the decoders, fetches the modules,
+# measures its own throughput on a probe batch, decides whether one shard fits
+# the time budget, aborts early if nothing is decoding, and checks the quality
+# gates itself. The only manual step left is Save Version, which is a UI
+# action - the last line reminds you.
 # =============================================================================
 
-# --- CELL 1 -----------------------------------------------------------------
-# !pip install -q pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm
+import os, sys, glob, math, time, json, shutil, traceback, subprocess
+from multiprocessing import Pool
 
-# Bootstrap.  Uses the step-00 output when it is attached, and fetches the
-# modules itself when it is not - so this notebook runs standalone with internet
-# ON, and off the attached output when internet is OFF.
-import os, sys, glob, subprocess
-
+SPLIT = "train"       # "test" is never needed: step 5 decodes DICOM directly
+SHARD = 0             # only edit if the probe below tells you to shard
+NUM_SHARDS = None     # None = decide from the measured throughput
+TIME_BUDGET_H = 9.0   # leave headroom inside the 12 h CPU limit
+N_PROBE = 48          # series decoded to measure throughput (kept, not wasted)
 REPO = "https://github.com/rahpalrah/ResumeParser"
 BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 
-# CLONE FIRST, fall back to an attached copy only when there is no network.
-#
-# The earlier order (attached wins) had a trap: every step copies knee_*.py into
-# /kaggle/working, so those files end up inside that notebook's saved output.
-# Attaching an earlier step's output for its parquet then ALSO pinned the code
-# to whatever it looked like that day, and later fixes were invisible. Cloning
-# first means the only notebook running old code is the offline one, which
-# cannot clone anyway.
+# ---- 1. decoders ------------------------------------------------------------
+# JPEG Lossless and JPEG 2000 both appear in this corpus and neither decodes
+# without a plugin. Installing quietly is cheaper than a 45 min run of zeros.
+_need = []
+for mod, pkg in [("libjpeg", "pylibjpeg-libjpeg"), ("openjpeg", "pylibjpeg-openjpeg"),
+                 ("gdcm", "python-gdcm"), ("pylibjpeg", "pylibjpeg")]:
+    try:
+        __import__(mod)
+    except Exception:
+        _need.append(pkg)
+if _need:
+    print("installing DICOM decoders:", " ".join(_need), flush=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *_need], check=True)
+else:
+    print("DICOM decoders already present")
+
+# ---- 2. modules -------------------------------------------------------------
 def _attached_code():
-    # Several depths: Kaggle mounts a dataset at /kaggle/input/<slug>/ or at
-    # /kaggle/input/datasets/<owner>/<slug>/, and a notebook output deeper
-    # still. A single-level glob finds nothing in the nested layout.
     hits = []
     for d in range(1, 5):
         hits += glob.glob("/kaggle/input/" + "*/" * d + "knee_common.py")
@@ -53,62 +61,46 @@ except Exception as e:
     CODE_DIR = _attached_code()
     print(f"clone unavailable ({type(e).__name__}); using attached code at {CODE_DIR}")
 assert CODE_DIR and os.path.exists(os.path.join(CODE_DIR, "knee_common.py")), (
-    "Could not obtain the modules. Either turn internet ON, or run step 00 and "
-    "attach its output (Add Data -> Your Work -> Notebook Output).")
-
-# Drop any already-imported copy: Python caches modules, so without this a
-# re-run of this cell keeps the version imported earlier in the session.
+    "Could not obtain the modules. Turn internet ON, or run step 00 and attach it.")
 for _m in [m for m in list(sys.modules) if m.startswith("knee_")]:
     del sys.modules[_m]
 sys.path.insert(0, CODE_DIR)
-print("code from:", CODE_DIR)
 
-import time, math, json, traceback
 import numpy as np, pandas as pd
-from multiprocessing import Pool
 import knee_common as kc
 
-COMP = kc.find_comp_dir()          # autodetected: never hard-code the slug
-print("competition data:", COMP)
+print("code from:", CODE_DIR)
+print("decoder status:")
+_st = kc.check_dicom_backends()
+assert _st.get("pydicom"), "pydicom missing - nothing can be read"
+if not any(_st.get(k) for k in ("libjpeg", "openjpeg", "gdcm")):
+    raise RuntimeError(
+        "No JPEG decoder available. Restart the kernel (the plugins were just "
+        "installed into a running session) and run this cell again.")
+
+COMP = kc.find_comp_dir()
 OUT = "/kaggle/working"
-
-# Sharding exists for the 12 h notebook limit, and step 0 measured the whole
-# job at ~1 h on 4 procs - and this step only decodes the ~17,600 slot-assigned
-# series, not all 24,371. One shard fits with hours to spare, so one run it is.
-# Raise NUM_SHARDS only if C3's ETA projects past ~10 h.
-SHARD = 0
-NUM_SHARDS = 1
-SPLIT = "train"      # "test" is NOT needed: step 5 decodes DICOM directly and
-                     # never reads a sprite cache.
-N_PROC = 4           # Kaggle CPU notebooks expose 4 vCPU
-
+N_PROC = max(1, (os.cpu_count() or 4))
 CFG = kc.Cfg(comp_dir=COMP, cache_dir=f"{OUT}/cache")
 os.makedirs(CFG.cache_dir, exist_ok=True)
-
 SERIES_ROOT = kc.find_series_root(COMP, SPLIT)
-print("DICOM root:", SERIES_ROOT)
-series = pd.read_csv(f"{COMP}/{SPLIT}_series.csv")
-# Only series that win a slot are ever read by the model, so only those are
-# decoded.  On a typical study that is 4 of 5-7 series - a third of the work
-# disappears here before a single DICOM is touched.
-series = pd.concat([kc.assign_slots(g) for _, g in series.groupby("StudyInstanceUID")])
+print(f"competition data: {COMP}\nDICOM root: {SERIES_ROOT}\nworkers: {N_PROC}")
+
+# ---- 3. which series ---------------------------------------------------------
+_all = pd.read_csv(f"{COMP}/{SPLIT}_series.csv")
+series = pd.concat([kc.assign_slots(g) for _, g in _all.groupby("StudyInstanceUID")])
 series = series[series["slot"] >= 0].reset_index(drop=True)
-print(f"{SPLIT}: {len(series):,} series in slots "
-      f"(of {len(pd.read_csv(f'{COMP}/{SPLIT}_series.csv')):,} total)")
+print(f"\n{SPLIT}: {len(series):,} series win a slot, of {len(_all):,} total "
+      f"({1 - len(series)/len(_all):.0%} skipped before a DICOM is touched)")
 
-mine = series[np.arange(len(series)) % NUM_SHARDS == SHARD].reset_index(drop=True)
-print(f"shard {SHARD}/{NUM_SHARDS}: {len(mine):,} series")
-
-# --- CELL 2 -----------------------------------------------------------------
+# ---- 4. the worker -----------------------------------------------------------
 LAT_MAP = {"L": 0, "LEFT": 0, "R": 1, "RIGHT": 1}
 
-def read_laterality(series_dir: str) -> int:
-    """Knee side from the DICOM header; 2 when the tag was not in the
-    allowlisted set for this site.  The model needs it to know which half of a
-    coronal slice is the medial compartment."""
+def read_laterality(series_dir):
+    """Knee side from the header; 2 when the tag was not allowlisted for this
+    site. The model needs it to know which half of a coronal slice is medial."""
     import pydicom
-    files = sorted(glob.glob(os.path.join(series_dir, "*.dcm")))[:3]
-    for f in files:
+    for f in sorted(glob.glob(os.path.join(series_dir, "*.dcm")))[:3]:
         try:
             ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
         except Exception:
@@ -125,63 +117,126 @@ def read_laterality(series_dir: str) -> int:
     return 2
 
 
-def work(rec: dict) -> dict:
-    sdir = os.path.join(SERIES_ROOT, rec["StudyInstanceUID"],
-                        rec["SeriesInstanceUID"])
-    out = dict(rec); out["ok"] = 0; out["Laterality"] = 2; out["kb"] = 0
+def work(rec):
+    sdir = os.path.join(SERIES_ROOT, rec["StudyInstanceUID"], rec["SeriesInstanceUID"])
+    out = dict(rec); out["ok"] = 0; out["Laterality"] = 2; out["kb"] = 0.0
+    out["std"] = 0.0
     dst = kc.sprite_path(CFG.cache_dir, rec["StudyInstanceUID"], rec["SeriesInstanceUID"])
     try:
         out["n_files"] = len(glob.glob(sdir + "/*.dcm"))
-        if os.path.exists(dst):                      # resume after a timeout
+        if os.path.exists(dst):                       # resume within a session
+            back = kc.read_sprite(dst, CFG.n_slices, CFG.img_size, CFG.grid_w)
             out["ok"] = 1
+            out["kb"] = os.path.getsize(dst) / 1024
+            out["std"] = float(back.std()) if back is not None else 0.0
             out["Laterality"] = read_laterality(sdir)
             return out
         vol = kc.load_series_volume(sdir, CFG.n_slices, CFG.img_size)
         if vol is None:
             return out
         out["kb"] = kc.write_sprite(dst, vol, CFG.grid_w, CFG.jpeg_quality) / 1024
+        out["std"] = float(vol.std())
         out["Laterality"] = read_laterality(sdir)
         out["ok"] = 1
     except Exception:
         out["err"] = traceback.format_exc(limit=1)
     return out
 
-# --- CELL 3 -----------------------------------------------------------------
-recs = mine.to_dict("records")
-t0 = time.time()
-results = []
-with Pool(N_PROC) as pool:
-    for i, r in enumerate(pool.imap_unordered(work, recs, chunksize=4)):
-        results.append(r)
-        if (i + 1) % 200 == 0 or i + 1 == len(recs):
-            el = time.time() - t0
-            eta = el / (i + 1) * (len(recs) - i - 1)
-            ok = sum(x["ok"] for x in results)
-            print(f"  {i+1:>6}/{len(recs)}  ok={ok:>6}  "
-                  f"{el/60:6.1f} min elapsed  ETA {eta/60:6.1f} min", flush=True)
 
+def run_pool(records, label, report_every=200):
+    t0, done = time.time(), []
+    with Pool(N_PROC) as pool:
+        for i, r in enumerate(pool.imap_unordered(work, records, chunksize=4)):
+            done.append(r)
+            n = i + 1
+            if n == report_every and sum(x["ok"] for x in done) == 0:
+                for x in done:
+                    if x.get("err"):
+                        print(x["err"])
+                        break
+                raise RuntimeError(
+                    f"{report_every} series in and not one decoded. Something is "
+                    f"wrong with the decoders or the DICOM root - aborting rather "
+                    f"than burning the full run.")
+            if n % report_every == 0 or n == len(records):
+                el = time.time() - t0
+                print(f"  [{label}] {n:>6}/{len(records)}  ok={sum(x['ok'] for x in done):>6}  "
+                      f"{el/60:6.1f} min  ETA {el/n*(len(records)-n)/60:6.1f} min", flush=True)
+    return done, time.time() - t0
+
+
+# ---- 5. probe, then decide how much fits ------------------------------------
+probe_recs = series.sample(min(N_PROBE, len(series)), random_state=0).to_dict("records")
+print(f"\nprobing {len(probe_recs)} series to measure throughput...")
+probe, probe_s = run_pool(probe_recs, "probe", report_every=len(probe_recs))
+ok_probe = sum(x["ok"] for x in probe)
+assert ok_probe, "no probe series decoded - see the traceback above"
+per_series = probe_s / len(probe_recs)
+total_h = per_series * len(series) / 3600
+need_shards = max(1, math.ceil(total_h / TIME_BUDGET_H))
+if NUM_SHARDS is None:
+    NUM_SHARDS = need_shards
+print(f"  {ok_probe}/{len(probe_recs)} decoded, {per_series:.2f} s/series wall "
+      f"-> {total_h:.1f} h for all {len(series):,}")
+print(f"  time budget {TIME_BUDGET_H} h -> NUM_SHARDS = {NUM_SHARDS}"
+      + ("" if NUM_SHARDS == 1 else
+         f"; run this cell once per SHARD in 0..{NUM_SHARDS-1}, Save Version each time"))
+
+mine = series[np.arange(len(series)) % NUM_SHARDS == SHARD].reset_index(drop=True)
+print(f"\nshard {SHARD}/{NUM_SHARDS}: {len(mine):,} series to process")
+
+# ---- 6. the run --------------------------------------------------------------
+results, elapsed = run_pool(mine.to_dict("records"), f"shard{SHARD}")
 meta = pd.DataFrame(results)
-meta.to_parquet(f"{OUT}/series_meta_{SPLIT}_shard{SHARD}.parquet", index=False)
-print(f"\nfailures: {int((meta['ok'] == 0).sum())}")
-if (meta["ok"] == 0).any():
-    print(meta[meta["ok"] == 0].head(5).to_string())
-print(f"cache size this shard: {meta['kb'].sum()/2**20:.2f} GiB")
-print("laterality distribution:", meta["Laterality"].value_counts().to_dict())
+meta_path = f"{OUT}/series_meta_{SPLIT}_shard{SHARD}.parquet"
+meta.to_parquet(meta_path, index=False)
 
-# --- CELL 4 -----------------------------------------------------------------
-# Verify a random sprite decodes back to the right shape before you spend a
-# "Save Version" on this shard.
-row = meta[meta["ok"] == 1].sample(1).iloc[0]
+# ---- 7. the gates, checked here rather than by eye --------------------------
+n = len(meta)
+fail_rate = float((meta["ok"] == 0).mean())
+unknown_lat = float((meta["Laterality"] == 2).mean())
+gib = float(meta["kb"].sum()) / 2**20
+# A near-flat sprite is a series that "succeeded" into blackness. One bad slice
+# is replaced by its neighbour, which is fine; a whole series of them is a
+# decoder that quietly gave up, and nothing else here would notice.
+blank = float((meta.loc[meta["ok"] == 1, "std"] < 1.0).mean()) if (meta["ok"] == 1).any() else 1.0
+print(f"\n{'='*66}\nshard {SHARD} finished in {elapsed/60:.1f} min -> {meta_path}")
+gates = [
+    ("decode failures < 2%", fail_rate < 0.02, f"{fail_rate:.2%} ({int(fail_rate*n)} of {n:,})"),
+    ("unknown laterality < 30%", unknown_lat < 0.30, f"{unknown_lat:.1%}"),
+    ("cache size < 15 GiB", gib < 15.0, f"{gib:.2f} GiB"),
+    ("near-black sprites < 2%", blank < 0.02, f"{blank:.2%}"),
+]
+for name, passed, detail in gates:
+    print(f"  {'PASS' if passed else 'FAIL'}  {name:<26s} {detail}")
+if fail_rate >= 0.02:
+    print("\nfirst failures:")
+    print(meta[meta["ok"] == 0].head(3).to_string())
+assert all(p for _, p, _ in gates), "a gate failed - read the rows above before saving"
+
+# ---- 8. round trip, and look at it -------------------------------------------
+row = meta[meta["ok"] == 1].sample(1, random_state=0).iloc[0]
 vol = kc.read_sprite(kc.sprite_path(CFG.cache_dir, row.StudyInstanceUID,
                                     row.SeriesInstanceUID),
                      CFG.n_slices, CFG.img_size, CFG.grid_w)
-print("round-trip:", vol.shape, vol.dtype, "min", vol.min(), "max", vol.max())
+assert vol is not None and vol.shape == (CFG.n_slices, CFG.img_size, CFG.img_size)
+print(f"  PASS  sprite round-trip        {vol.shape}, range [{vol.min()}, {vol.max()}]")
 
 import matplotlib.pyplot as plt
+step = max(1, CFG.n_slices // 8)
 plt.figure(figsize=(14, 3))
 for i in range(8):
     plt.subplot(1, 8, i + 1)
-    plt.imshow(vol[i * (CFG.n_slices // 8)], cmap="gray"); plt.axis("off")
+    plt.imshow(vol[min(i * step, CFG.n_slices - 1)], cmap="gray"); plt.axis("off")
 plt.suptitle(f"{row.Anatomical_Plane} fluid={row.Fluid_Sensitive} "
-             f"fat={row.Fat_Suppression} slot={row.slot}")
+             f"fat={row.Fat_Suppression} slot={row.slot} - must look like knee MRI")
 plt.show()
+
+print(f"\n{'='*66}")
+print("ALL GATES PASSED.  Now: Save Version -> Quick Save.")
+print("Quick Save keeps /kaggle/working as it stands; Save & Run All would")
+print(f"re-run the whole {elapsed/60:.0f} minutes for nothing.")
+if NUM_SHARDS > 1:
+    nxt = SHARD + 1
+    print(f"Then set SHARD = {nxt} and repeat"
+          if nxt < NUM_SHARDS else "That was the last shard.")

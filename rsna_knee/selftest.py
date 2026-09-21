@@ -371,6 +371,20 @@ def main():
         assert back.shape == vol.shape
         print(f"[9] sprite round-trip {back.shape}, mean abs err {np.abs(back.astype(int)-vol.astype(int)).mean():.2f}")
 
+        # A series where NOTHING decodes must be rejected, not returned black.
+        # Each failed slice is replaced by its neighbour, which is right for one
+        # bad slice and catastrophic for a whole series: a missing transfer-
+        # syntax plugin would otherwise fill the cache with black sprites,
+        # report zero failures, and train the model on nothing.
+        bad = os.path.join(tmp, "undecodable", "series")
+        os.makedirs(bad, exist_ok=True)
+        for i in range(4):
+            with open(os.path.join(bad, f"{i}.dcm"), "wb") as fh:
+                fh.write(b"not a dicom at all")
+        assert kc.load_series_volume(bad, cfg.n_slices, cfg.img_size) is None, \
+            "an undecodable series came back as a volume"
+        print("[9b] a series that decodes no slices returns None, not black pixels")
+
         # metric + rank normalisation
         pred = np.random.rand(50, kc.N_LABELS)
         truth = (np.random.rand(50, kc.N_LABELS) > 0.7).astype(np.float32)

@@ -336,6 +336,7 @@ def load_series_volume(series_dir: str, n_slices: int, img_size: int,
     idx = pick_slice_indices(len(ordered), n_slices, jitter=jitter)
     raw: List[np.ndarray] = []
     invert: List[bool] = []
+    n_decoded = 0
     for i in idx:
         try:
             ds = pydicom.dcmread(ordered[int(i)], force=True)
@@ -344,6 +345,7 @@ def load_series_volume(series_dir: str, n_slices: int, img_size: int,
             inter = float(getattr(ds, "RescaleIntercept", 0.0) or 0.0)
             a = a * slope + inter
             inv = str(getattr(ds, "PhotometricInterpretation", "")) == "MONOCHROME1"
+            n_decoded += 1
         except Exception:
             a = raw[-1].copy() if raw else np.zeros((img_size, img_size), np.float32)
             inv = False
@@ -351,6 +353,15 @@ def load_series_volume(series_dir: str, n_slices: int, img_size: int,
             a = a.mean(axis=-1) if a.shape[-1] in (3, 4) else a[a.shape[0] // 2]
         raw.append(a)
         invert.append(inv)
+
+    # A slice that fails to decode is replaced above by its neighbour, or by
+    # zeros when it is the first. That is right for one bad slice in a series
+    # and catastrophic for a series where NOTHING decodes: without this check
+    # the function returns a perfectly black volume and reports success, so a
+    # missing transfer-syntax plugin would fill the cache with black sprites,
+    # report no failures, pass every gate, and train the model on nothing.
+    if n_decoded == 0:
+        return None
 
     # MONOCHROME1 means high value = dark.  Invert against the maximum of the
     # whole stack, never per slice: a per-slice max would rescale every slice
