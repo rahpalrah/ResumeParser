@@ -17,10 +17,13 @@
 import os, sys, glob, math, time, json, shutil, traceback, subprocess
 from multiprocessing import Pool
 
-SPLIT = "train"       # "test" is never needed: step 5 decodes DICOM directly
-SHARD = 0             # only edit if the probe below tells you to shard
-NUM_SHARDS = None     # None = decide from the measured throughput
-TIME_BUDGET_H = 9.0   # leave headroom inside the 12 h CPU limit
+# Settings read from globals() first, so the one-cell runner can set them
+# without editing this file - `SHARD = 1` before the exec is enough.
+SPLIT = globals().get("SPLIT", "train")   # "test" is never needed: step 5
+                                          # decodes DICOM directly
+SHARD = globals().get("SHARD", 0)         # only if the probe says to shard
+NUM_SHARDS = globals().get("NUM_SHARDS", None)   # None = decide from throughput
+TIME_BUDGET_H = globals().get("TIME_BUDGET_H", 9.0)  # inside the 12 h CPU limit
 N_PROBE = 48          # series decoded to measure throughput (kept, not wasted)
 REPO = "https://github.com/rahpalrah/ResumeParser"
 BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"

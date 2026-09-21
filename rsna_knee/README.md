@@ -77,7 +77,8 @@ the "expected output" below, stop and fix it before spending GPU hours.
 | `knee_model.py` | CARE-Net, asymmetric soft-target loss, weight EMA |
 | `knee_data.py` | study-level dataset, augmentation, multi-label folds |
 | `knee_text.py` | report lexicon: 8 languages, clause-scoped, negation on both sides |
-| `selftest.py` | 15 checks on synthetic data — run by step 00 |
+| `run_step.py` | one-cell runner: clones and execs a step, no paste to truncate |
+| `selftest.py` | checks on synthetic data — run by step 00 |
 | `step00_bootstrap.py` | clones the repo on Kaggle, self-tests, downloads wheels |
 | `step0_setup.py` | environment + data sanity check |
 | `step1_reports.py` | multilingual rule lexicon over the reports |
@@ -88,6 +89,18 @@ the "expected output" below, stop and fix it before spending GPU hours.
 
 Each `stepN_*.py` is a notebook written as `# --- CELL n ---` blocks. Paste one
 block per Kaggle cell.
+
+**Or paste `run_step.py` instead — one short cell that clones this repo and
+runs the step from the file.** These steps are long, and a truncated paste
+fails with `SyntaxError: incomplete input` at whatever line the copy stopped,
+which reads like a bug in the code and is not. The runner cannot be truncated
+into something that silently half-works, and what executes is always current.
+Settings are read from `globals()` first, so an override goes above the exec:
+
+```python
+SHARD = 1          # before the exec; the step will not overwrite it
+STEP = "step3_preprocess.py"
+```
 
 Step 00 runs `selftest.py` for you on Kaggle (CPU, ~30 s). It builds a fake
 sprite cache, runs the dataset, the model, the loss, the EMA, the mirror TTA,
