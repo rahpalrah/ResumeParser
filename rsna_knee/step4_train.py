@@ -19,7 +19,13 @@
 # =============================================================================
 
 # --- CELL 1 -----------------------------------------------------------------
-# !pip install -q timm iterative-stratification
+import subprocess, sys
+for _mod, _pkg in [("timm", "timm"), ("iterstrat", "iterative-stratification")]:
+    try:
+        __import__(_mod)
+    except Exception:
+        print("installing", _pkg, flush=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", _pkg], check=True)
 # Bootstrap.  Uses the step-00 output when it is attached, and fetches the
 # modules itself when it is not - so this notebook runs standalone with internet
 # ON, and off the attached output when internet is OFF.
@@ -86,8 +92,13 @@ _t = kc.find_inputs("study_targets.parquet")
 assert _t, "Attach the step-2 notebook output (study_targets.parquet)"
 TARGETS = _t[0]
 
-FOLD = 0                       # <-- CHANGE per run
-EFFICIENCY = False             # True -> the small config for the efficiency track
+FOLD = globals().get("FOLD", 0)
+EFFICIENCY = globals().get("EFFICIENCY", False)   # True -> efficiency-track config
+# Kaggle stops a GPU session at 9 h and the checkpoint dies with it. Training
+# stops itself with time to spare and keeps the best epoch so far, which beats
+# discovering the limit the hard way five hours in.
+TIME_BUDGET_H = globals().get("TIME_BUDGET_H", 7.5)
+T_START = time.time()
 CFG = (kc.CFG_EFFICIENCY if EFFICIENCY else kc.Cfg())
 CFG.comp_dir, CFG.out_dir = COMP, OUT
 kc.seed_everything(CFG.seed + FOLD)
@@ -262,6 +273,14 @@ def train_stage(name, loader, epochs, lr_scale=1.0):
         print(f"  [{name}] epoch {ep}: loss {run/max(len(loader),1):.4f} "
               f"| select AUC {m:.5f} | gold AUC {m_gold:.5f} "
               f"| {(time.time()-t0)/60:.1f} min")
+        spent = (time.time() - T_START) / 3600
+        per_epoch = spent / (ep + 1)
+        if spent + per_epoch > TIME_BUDGET_H and ep + 1 < epochs:
+            print(f"    stopping after epoch {ep}: {spent:.1f} h spent, another "
+                  f"{per_epoch:.1f} h would pass the {TIME_BUDGET_H} h budget")
+            _stop = True
+        else:
+            _stop = False
         best = max(best, m)
         if m > GLOBAL_BEST:
             GLOBAL_BEST = m
@@ -269,10 +288,14 @@ def train_stage(name, loader, epochs, lr_scale=1.0):
                         "fold": FOLD, "auc": m},
                        f"{OUT}/carenet_f{FOLD}.pt")
             print(f"    saved (best so far {GLOBAL_BEST:.5f})")
+        if _stop:
+            break
     return best
 
-print("\n=== training on the report teacher's targets ===")
-best = train_stage("distil", dl_tr, CFG.epochs_pseudo + CFG.epochs_gold)
+EPOCHS = globals().get("EPOCHS", CFG.epochs_pseudo + CFG.epochs_gold)
+print(f"\n=== training on the report teacher's targets: {EPOCHS} epochs, "
+      f"{TIME_BUDGET_H} h budget ===")
+best = train_stage("distil", dl_tr, EPOCHS)
 
 # --- CELL 4 -----------------------------------------------------------------
 ck = torch.load(f"{OUT}/carenet_f{FOLD}.pt", map_location="cpu", weights_only=False)
