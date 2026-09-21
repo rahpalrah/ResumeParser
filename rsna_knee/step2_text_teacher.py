@@ -125,7 +125,7 @@ def run_fold(fold, folds, tok):
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
     steps = len(dl_tr) * EPOCHS
     sch = get_cosine_schedule_with_warmup(opt, int(0.06 * steps), steps)
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = kc.make_grad_scaler()
     lossf = nn.BCEWithLogitsLoss()
 
     best, best_state = -1.0, None
@@ -133,14 +133,14 @@ def run_fold(fold, folds, tok):
         model.train()
         for b in dl_tr:
             b = {k: v.to(DEV, non_blocking=True) for k, v in b.items()}
-            with torch.cuda.amp.autocast():
+            with kc.amp_autocast():
                 loss = lossf(model(b["input_ids"], b["attention_mask"], b["rule"]),
                              b["target"])
             scaler.scale(loss).backward()
             scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); sch.step()
 
         model.eval(); P = []
-        with torch.no_grad(), torch.cuda.amp.autocast():
+        with torch.no_grad(), kc.amp_autocast():
             for b in dl_va:
                 b = {k: v.to(DEV) for k, v in b.items()}
                 P.append(torch.sigmoid(model(b["input_ids"], b["attention_mask"],
@@ -183,7 +183,7 @@ for f in range(FOLDS):
     model = ReportTeacher().to(DEV)
     model.load_state_dict(torch.load(f"{OUT}/teacher_f{f}.pt", map_location="cpu")); model.eval()
     P = []
-    with torch.no_grad(), torch.cuda.amp.autocast():
+    with torch.no_grad(), kc.amp_autocast():
         for b in dl:
             b = {k: v.to(DEV) for k, v in b.items()}
             P.append(torch.sigmoid(model(b["input_ids"], b["attention_mask"],

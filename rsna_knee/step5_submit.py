@@ -157,7 +157,7 @@ for ci, path in enumerate(CKPTS):
     model.load_state_dict(ck["model"])
     model = model.to(DEV).eval()
     P = []
-    with torch.no_grad(), torch.cuda.amp.autocast():
+    with torch.no_grad(), kc.amp_autocast():
         for bi, b in enumerate(dl):
             x = {k: (v.to(DEV, non_blocking=True) if torch.is_tensor(v) else v)
                  for k, v in b.items()}

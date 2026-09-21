@@ -80,6 +80,18 @@ LEXICON_CASES = [
 ]
 
 
+def test_amp_compat():
+    """Kaggle is on torch 2.10 and moving; the AMP spelling this code uses must
+    resolve on whatever version the notebook happens to get."""
+    with kc.amp_autocast("cpu"):
+        y = torch.randn(4, 4) @ torch.randn(4, 4)
+    assert y.shape == (4, 4)
+    scaler = kc.make_grad_scaler("cpu")
+    assert hasattr(scaler, "scale") and hasattr(scaler, "step")
+    print(f"[12] AMP compat on torch {torch.__version__}: "
+          f"autocast -> {y.dtype}, scaler -> {type(scaler).__name__}")
+
+
 def test_path_discovery():
     """The competition slug and mount layout have both moved before; nothing in
     the pipeline may hard-code them."""
@@ -102,7 +114,7 @@ def test_path_discovery():
             raise AssertionError("missing data should raise")
         except FileNotFoundError:
             pass
-        print("[12] competition path autodetected past a decoy; missing data raises clearly")
+        print("[13] competition path autodetected past a decoy; missing data raises clearly")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -120,7 +132,7 @@ def test_lexicon():
     for t, miss, extra in bad:
         print(f"    LEXICON FAIL {t[:60]!r} missing={miss} false={extra}")
     assert not bad, f"{len(bad)}/{len(LEXICON_CASES)} lexicon cases failed"
-    print(f"[13] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass")
+    print(f"[14] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass")
 
 
 def test_train_loop(studies, series_df, y, cfg, tmp):
@@ -149,7 +161,7 @@ def test_train_loop(studies, series_df, y, cfg, tmp):
         if i >= 1:
             break
     assert not torch.allclose(before, model.head.base.weight), "weights did not move"
-    print(f"[14] two optimiser steps ran; head weight moved by "
+    print(f"[15] two optimiser steps ran; head weight moved by "
           f"{(model.head.base.weight - before).abs().mean().item():.2e}")
 
     # eval path must produce one row per study and a finite AUC
@@ -165,7 +177,7 @@ def test_train_loop(studies, series_df, y, cfg, tmp):
     assert P.shape == (len(studies), kc.N_LABELS), P.shape
     m, _ = kc.macro_auc(Y, P)
     assert np.isfinite(m)
-    print(f"[15] eval produced {P.shape} predictions, macro AUC {m:.3f}")
+    print(f"[16] eval produced {P.shape} predictions, macro AUC {m:.3f}")
 
     # checkpoint round trip exactly as step 5 does it
     ckpt = os.path.join(tmp, "ck.pt")
@@ -181,7 +193,7 @@ def test_train_loop(studies, series_df, y, cfg, tmp):
         a = torch.sigmoid(ema.ema(b)["logits"])
         c = torch.sigmoid(m2(b)["logits"])
     assert torch.allclose(a, c, atol=1e-5), (a - c).abs().max().item()
-    print("[16] checkpoint save/reload reproduces identical predictions")
+    print("[17] checkpoint save/reload reproduces identical predictions")
 
 
 def main():
@@ -268,6 +280,7 @@ def main():
         assert len(set(folds.tolist())) > 1
         print(f"[11] folds {folds.tolist()}")
 
+        test_amp_compat()
         test_path_discovery()
         test_lexicon()
         test_train_loop(studies, series_df, y, cfg, tmp)

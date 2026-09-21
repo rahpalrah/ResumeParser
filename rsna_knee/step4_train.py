@@ -133,7 +133,7 @@ print(f"CARE-Net {CFG.backbone}: {n_par:.1f} M parameters")
 
 lossf = SoftAsymmetricLoss()
 ema = ModelEMA(model, CFG.ema_decay)
-scaler = torch.cuda.amp.GradScaler()
+scaler = kc.make_grad_scaler()
 
 def param_groups(m):
     bb, hd = [], []
@@ -149,7 +149,7 @@ def evaluate(net, loader, tta=False):
     for b in loader:
         x = {k: (v.to(DEV, non_blocking=True) if torch.is_tensor(v) else v)
              for k, v in b.items()}
-        with torch.cuda.amp.autocast():
+        with kc.amp_autocast():
             p = torch.sigmoid(net(x)["logits"]).float()
             if tta:   # mirror TTA, with the laterality token flipped to match
                 xf = dict(x)
@@ -179,7 +179,7 @@ def train_stage(name, loader, epochs, lr_scale=1.0):
         for i, b in enumerate(loader):
             x = {k: (v.to(DEV, non_blocking=True) if torch.is_tensor(v) else v)
                  for k, v in b.items()}
-            with torch.cuda.amp.autocast():
+            with kc.amp_autocast():
                 o = model(x)
                 loss = lossf(o["logits"], x["target"], x["weight"])
                 if "logit_med" in o:   # deep supervision on the compartment branch

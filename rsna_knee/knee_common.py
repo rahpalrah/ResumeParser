@@ -117,6 +117,30 @@ CFG_EFFICIENCY = Cfg(
 )
 
 
+def amp_autocast(device: str = "cuda", enabled: bool = True):
+    """Mixed-precision context that works across torch versions.
+
+    `torch.cuda.amp.autocast` was deprecated in torch 2.4 in favour of
+    `torch.amp.autocast("cuda")` and is on its way out.  Kaggle's image moves
+    faster than this code does - it is already on torch 2.10 - so ask for the
+    modern spelling and fall back to the old one.
+    """
+    import torch
+    try:
+        return torch.amp.autocast(device, enabled=enabled)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.autocast(enabled=enabled)
+
+
+def make_grad_scaler(device: str = "cuda"):
+    """GradScaler, same version dance as amp_autocast."""
+    import torch
+    try:
+        return torch.amp.GradScaler(device)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler()
+
+
 def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.csv") -> str:
     """Locate the competition data wherever Kaggle chose to mount it.
 
