@@ -14,7 +14,7 @@
 # action - the last line reminds you.
 # =============================================================================
 
-import os, sys, glob, math, time, json, shutil, traceback, subprocess
+import os, sys, glob, math, time, json, shutil, hashlib, traceback, subprocess
 from multiprocessing import Pool
 
 # Settings read from globals() first, so the one-cell runner can set them
@@ -146,8 +146,8 @@ def work(rec):
     return out
 
 
-def run_pool(records, label, report_every=200):
-    t0, done = time.time(), []
+def run_pool(records, label, report_every=200, warmup=0):
+    t0, done, warm_s = time.time(), [], 0.0
     with Pool(N_PROC) as pool:
         for i, r in enumerate(pool.imap_unordered(work, records, chunksize=4)):
             done.append(r)
@@ -161,20 +161,26 @@ def run_pool(records, label, report_every=200):
                     f"{report_every} series in and not one decoded. Something is "
                     f"wrong with the decoders or the DICOM root - aborting rather "
                     f"than burning the full run.")
+            if n == warmup:
+                warm_s = time.time() - t0
             if n % report_every == 0 or n == len(records):
                 el = time.time() - t0
                 print(f"  [{label}] {n:>6}/{len(records)}  ok={sum(x['ok'] for x in done):>6}  "
                       f"{el/60:6.1f} min  ETA {el/n*(len(records)-n)/60:6.1f} min", flush=True)
-    return done, time.time() - t0
+    return done, time.time() - t0, warm_s
 
 
 # ---- 5. probe, then decide how much fits ------------------------------------
 probe_recs = series.sample(min(N_PROBE, len(series)), random_state=0).to_dict("records")
 print(f"\nprobing {len(probe_recs)} series to measure throughput...")
-probe, probe_s = run_pool(probe_recs, "probe", report_every=len(probe_recs))
+probe, probe_s, warm_s = run_pool(probe_recs, "probe", report_every=len(probe_recs),
+                                  warmup=len(probe_recs) // 2)
 ok_probe = sum(x["ok"] for x in probe)
 assert ok_probe, "no probe series decoded - see the traceback above"
-per_series = probe_s / len(probe_recs)
+# Time only the second half. Pool start-up and the first cold reads are a
+# fixed cost amortised over 48 series here and over 19,000 in the real run;
+# charging them per series projected 2.8 h for a job that took 78 min.
+per_series = (probe_s - warm_s) / max(1, len(probe_recs) - len(probe_recs) // 2)
 total_h = per_series * len(series) / 3600
 need_shards = max(1, math.ceil(total_h / TIME_BUDGET_H))
 if NUM_SHARDS is None:
@@ -185,11 +191,16 @@ print(f"  time budget {TIME_BUDGET_H} h -> NUM_SHARDS = {NUM_SHARDS}"
       + ("" if NUM_SHARDS == 1 else
          f"; run this cell once per SHARD in 0..{NUM_SHARDS-1}, Save Version each time"))
 
-mine = series[np.arange(len(series)) % NUM_SHARDS == SHARD].reset_index(drop=True)
+# Shard by STUDY, not by row. Splitting a study's series across shards makes
+# every per-study statistic inside one shard a half-measurement - laterality
+# above all, since the model resolves it per study.
+_studies = series["StudyInstanceUID"].astype(str)
+_bucket = _studies.map(lambda u: int(hashlib.md5(u.encode()).hexdigest(), 16) % NUM_SHARDS)
+mine = series[_bucket == SHARD].reset_index(drop=True)
 print(f"\nshard {SHARD}/{NUM_SHARDS}: {len(mine):,} series to process")
 
 # ---- 6. the run --------------------------------------------------------------
-results, elapsed = run_pool(mine.to_dict("records"), f"shard{SHARD}")
+results, elapsed, _ = run_pool(mine.to_dict("records"), f"shard{SHARD}")
 meta = pd.DataFrame(results)
 meta_path = f"{OUT}/series_meta_{SPLIT}_shard{SHARD}.parquet"
 meta.to_parquet(meta_path, index=False)
@@ -197,7 +208,13 @@ meta.to_parquet(meta_path, index=False)
 # ---- 7. the gates, checked here rather than by eye --------------------------
 n = len(meta)
 fail_rate = float((meta["ok"] == 0).mean())
-unknown_lat = float((meta["Laterality"] == 2).mean())
+# Per SERIES is not the question. KneeStudyDataset resolves laterality per
+# study, taking the first series that knows the side, so a study is unknown
+# only when all of its series are. Sharding by study makes this exact.
+lat_series = float((meta["Laterality"] == 2).mean())
+_per_study = meta[meta["ok"] == 1].groupby("StudyInstanceUID")["Laterality"].apply(
+    lambda v: int(all(x == 2 for x in v)))
+unknown_lat = float(_per_study.mean()) if len(_per_study) else 1.0
 gib = float(meta["kb"].sum()) / 2**20
 # A near-flat sprite is a series that "succeeded" into blackness. One bad slice
 # is replaced by its neighbour, which is fine; a whole series of them is a
@@ -206,7 +223,8 @@ blank = float((meta.loc[meta["ok"] == 1, "std"] < 1.0).mean()) if (meta["ok"] ==
 print(f"\n{'='*66}\nshard {SHARD} finished in {elapsed/60:.1f} min -> {meta_path}")
 gates = [
     ("decode failures < 2%", fail_rate < 0.02, f"{fail_rate:.2%} ({int(fail_rate*n)} of {n:,})"),
-    ("unknown laterality < 30%", unknown_lat < 0.30, f"{unknown_lat:.1%}"),
+    ("unknown laterality < 30%", unknown_lat < 0.30,
+     f"{unknown_lat:.1%} of studies ({lat_series:.1%} of series)"),
     ("cache size < 15 GiB", gib < 15.0, f"{gib:.2f} GiB"),
     ("near-black sprites < 2%", blank < 0.02, f"{blank:.2%}"),
 ]
