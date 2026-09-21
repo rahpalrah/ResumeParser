@@ -7,6 +7,7 @@ instead of six GPU hours into step 4.
 
     python selftest.py
 """
+import math
 import os
 import shutil
 import tempfile
@@ -378,6 +379,29 @@ def main():
         m2, _ = kc.macro_auc(truth, rn)
         assert abs(m - m2) < 1e-9, (m, m2)
         print(f"[10] macro AUC {m:.4f}; rank-normalisation is order-preserving (delta {abs(m-m2):.2e})")
+
+        # Sparse gold labels: only annotated cells may be scored, and a column
+        # with too few annotated rows must report nan, not a fabricated number.
+        mask = np.zeros_like(truth)
+        mask[:, 0] = 1
+        mask[:3, 1] = 1
+        _, per_m = kc.macro_auc(truth, pred, mask=mask)
+        assert not math.isnan(per_m[kc.LABELS[0]]), "fully annotated column skipped"
+        assert math.isnan(per_m[kc.LABELS[2]]), "unannotated column scored anyway"
+        scored = sum(1 for v in per_m.values() if not math.isnan(v))
+        print(f"[10b] masked metric scores {scored} annotated column(s), nan for the rest")
+
+        # Soft y_true: the rules are graded and the teacher emits probabilities,
+        # so both callers pass continuous targets. roc_auc_score rejects those
+        # outright - "continuous format is not supported" - which is a crash
+        # mid-epoch, not a wrong number, and step 4 validates against teacher
+        # probabilities too.
+        soft = np.random.choice([0.0, 0.35, 0.7, 1.0], size=truth.shape)
+        m_soft, _ = kc.macro_auc(soft, pred)
+        m_hard, _ = kc.macro_auc((soft > 0.5).astype(np.float64), pred)
+        assert abs(m_soft - m_hard) < 1e-12, (m_soft, m_hard)
+        assert np.isfinite(kc.macro_auc(np.random.rand(*truth.shape), pred)[0])
+        print(f"[10c] soft targets binarise at 0.5: {m_soft:.4f} == explicit {m_hard:.4f}")
 
         folds = make_folds(studies, 4, seed=0)
         assert len(set(folds.tolist())) > 1

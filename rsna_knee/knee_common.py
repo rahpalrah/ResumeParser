@@ -467,7 +467,8 @@ def study_series_map(series_df: pd.DataFrame) -> Dict[str, Dict[int, List[str]]]
 # --------------------------------------------------------------------------- #
 
 def macro_auc(y_true: np.ndarray, y_pred: np.ndarray,
-              mask: Optional[np.ndarray] = None) -> Tuple[float, Dict[str, float]]:
+              mask: Optional[np.ndarray] = None,
+              threshold: float = 0.5) -> Tuple[float, Dict[str, float]]:
     """Competition metric: mean ROC AUC over the twelve targets.
 
     `mask` (same shape as y_true, 1 = this cell is a real annotation) exists
@@ -475,10 +476,23 @@ def macro_auc(y_true: np.ndarray, y_pred: np.ndarray,
     findings and not others, and scoring an un-annotated cell against a
     placeholder would be worse than skipping it.
 
+    `y_true` may be SOFT. The rule scores are graded (0 / 0.35 / 0.7 / 1.0) and
+    the teacher emits probabilities, so both are continuous, while
+    roc_auc_score accepts hard labels only - it raises "continuous format is
+    not supported". Anything outside {0, 1} is therefore binarised at
+    `threshold`, which is the intended reading when scoring a model against
+    soft targets: did it rank the cells the target calls positive above the
+    rest. Step 4 validates against the teacher's probabilities and would hit
+    exactly the same wall, so this belongs in the metric, not at each call
+    site.
+
     Columns that are constant, or that have fewer than two usable rows, are
     undefined and reported as nan rather than silently averaged in.
     """
     from sklearn.metrics import roc_auc_score
+    y_true = np.asarray(y_true, dtype=np.float64)
+    if not np.isin(y_true, (0.0, 1.0)).all():
+        y_true = (y_true > threshold).astype(np.float64)
     per: Dict[str, float] = {}
     for i, name in enumerate(LABELS):
         sel = np.ones(len(y_true), dtype=bool) if mask is None else (mask[:, i] > 0)
