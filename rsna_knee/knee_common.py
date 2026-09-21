@@ -100,7 +100,7 @@ class Cfg:
     num_workers: int = 2
 
     # paths (overridden per notebook)
-    comp_dir: str = "/kaggle/input/rsna-knee-abnormalities-detection"
+    comp_dir: str = ""           # set by find_comp_dir(); never hard-coded
     cache_dir: str = "/kaggle/working/cache"
     out_dir: str = "/kaggle/working"
 

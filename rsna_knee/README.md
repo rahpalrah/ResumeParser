@@ -190,6 +190,8 @@ step 3.
 **Expected output (shapes will match, exact numbers will not):**
 
 ```
+code from: /kaggle/working
+competition data: /kaggle/input/competitions/rsna-knee-abnormality-detection
 torch 2.x.x | cuda True | 2 device(s)
   gpu0: Tesla T4  14.7 GiB
   gpu1: Tesla T4  14.7 GiB
@@ -207,19 +209,23 @@ studies with a report    : all studies
 
 prevalence among labelled studies
   Effusion          ~30%   ########################
-  Medial Meniscus   ~25%   ####################
   ...
   Fracture          ~2%    #
 
-slices on disk: 30
-volume (16, 256, 256)  dtype uint8  in 1.4s
-sprite jpeg: 78.4 KiB -> projected cache = 2.1 GiB
-projected preprocessing wall time on 4 procs: 2.6 h
+    30 slices -> (16, 256, 256)   1.41s    78.4 KiB  Sagittal
+    28 slices -> (16, 256, 256)   1.22s    74.1 KiB  Coronal
+  ...
+median 1.30s and 76.2 KiB per series over 5/5 successful probes
+projected cache for all 27,431 series : 1.99 GiB
+projected step-3 wall time on 4 procs : 2.5 h total
+  -> with NUM_SHARDS = 8 that is 0.3 h per shard (must stay under ~11 h)
 ```
 
-**Gate:** if `volume` is `None`, a decoder is missing — install the wheels and
-re-run cell 2 before going on. If the projected cache is over ~15 GiB, drop
-`img_size` to 224 or `n_slices` to 12 in `Cfg`.
+**Gate:** every probe decodes (`5/5 successful`) and the displayed slices look
+like knee MRI. `DECODE FAILED` on all five means a decoder is missing — install
+the wheels from cell 2 and re-run. If the projected cache is over ~15 GiB, drop
+`img_size` to 224 or `n_slices` to 12 in `Cfg`; if per-shard time exceeds ~11 h,
+raise `NUM_SHARDS` in step 3.
 
 ## STEP 1 — mine the reports (CPU, ~10 min, internet ON)
 

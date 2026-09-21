@@ -81,30 +81,56 @@ print("\nseries per study:",
       train_series.groupby("StudyInstanceUID").size().describe().to_string())
 
 # --- CELL 4 -----------------------------------------------------------------
-# Time a single-series read end to end.  This number decides how you shard the
-# preprocessing step: total_series * seconds_per_series / 4 workers < 11 hours.
+# Time the real read path on a random sample of series.  One series is far too
+# noisy to plan from: slice counts run 20-300 and transfer syntaxes decode at
+# very different speeds.  This number decides how you shard step 3:
+#     n_series * seconds_per_series / 4 workers  <  11 hours per shard
 cfg = kc.Cfg(comp_dir=COMP)
-one = train_series.iloc[0]
-sdir = os.path.join(kc.find_series_root(COMP, "train"),
-                    one.StudyInstanceUID, one.SeriesInstanceUID)
-print("slices on disk:", len(glob.glob(sdir + "/*.dcm")))
+TRAIN_ROOT = kc.find_series_root(COMP, "train")
+N_PROBE = 5
 
-t0 = time.time()
-vol = kc.load_series_volume(sdir, cfg.n_slices, cfg.img_size)
-dt = time.time() - t0
-print(f"volume {None if vol is None else vol.shape}  dtype "
-      f"{None if vol is None else vol.dtype}  in {dt:.2f}s")
+sample = train_series.sample(N_PROBE, random_state=0)
+times, sizes, first_vol = [], [], None
+for _, row in sample.iterrows():
+    sdir = os.path.join(TRAIN_ROOT, row.StudyInstanceUID, row.SeriesInstanceUID)
+    n_dcm = len(glob.glob(sdir + "/*.dcm"))
+    t0 = time.time()
+    vol = kc.load_series_volume(sdir, cfg.n_slices, cfg.img_size)
+    dt = time.time() - t0
+    if vol is None:
+        print(f"  DECODE FAILED  {n_dcm} slices  {row.Anatomical_Plane}")
+        print(f"    {sdir}")
+        continue
+    kb = kc.write_sprite("/kaggle/working/_probe.jpg", vol, cfg.grid_w,
+                         cfg.jpeg_quality) / 1024
+    times.append(dt); sizes.append(kb)
+    first_vol = first_vol if first_vol is not None else vol
+    print(f"  {n_dcm:>4} slices -> {vol.shape}  {dt:5.2f}s  {kb:6.1f} KiB  "
+          f"{row.Anatomical_Plane}")
 
-nbytes = kc.write_sprite("/kaggle/working/_probe.jpg", vol, cfg.grid_w, cfg.jpeg_quality)
-print(f"sprite jpeg: {nbytes/1024:.1f} KiB "
-      f"-> projected cache = {nbytes*len(train_series)/2**30:.2f} GiB")
-print(f"projected preprocessing wall time on 4 procs: "
-      f"{dt*len(train_series)/4/3600:.1f} h")
+assert times, (
+    "Every probe series failed to decode. Install the DICOM decoders "
+    "(cell 2 prints the pip line) and re-run this cell.")
+
+t_med = float(np.median(times))
+kb_med = float(np.median(sizes))
+n_series = len(train_series)
+print(f"\nmedian {t_med:.2f}s and {kb_med:.1f} KiB per series over "
+      f"{len(times)}/{N_PROBE} successful probes")
+print(f"projected cache for all {n_series:,} series : "
+      f"{kb_med * n_series / 2**20:.2f} GiB")
+print(f"projected step-3 wall time on 4 procs      : "
+      f"{t_med * n_series / 4 / 3600:.1f} h total")
+print(f"  -> with NUM_SHARDS = 8 that is "
+      f"{t_med * n_series / 4 / 3600 / 8:.1f} h per shard "
+      f"(must stay under ~11 h)")
 
 import matplotlib.pyplot as plt
+step = max(1, cfg.n_slices // 6)
 plt.figure(figsize=(12, 3))
-for i in range(min(6, cfg.n_slices)):
-    plt.subplot(1, 6, i + 1); plt.imshow(vol[i * (cfg.n_slices // 6)], cmap="gray")
+for i in range(6):
+    plt.subplot(1, 6, i + 1)
+    plt.imshow(first_vol[min(i * step, cfg.n_slices - 1)], cmap="gray")
     plt.axis("off")
-plt.suptitle("STEP 0 sanity: one preprocessed series")
+plt.suptitle("STEP 0 sanity: these must look like knee MRI, not noise")
 plt.show()
