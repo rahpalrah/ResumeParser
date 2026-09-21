@@ -34,22 +34,31 @@ import os, sys, glob, subprocess
 REPO = "https://github.com/rahpalrah/ResumeParser"
 BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 
-def _locate_code():
-    hits = (glob.glob("/kaggle/input/*/knee_common.py")
-            + glob.glob("/kaggle/working/knee_common.py"))
+# An ATTACHED dataset wins, because step 5 runs with no network. Otherwise
+# clone fresh on every run - never reuse an earlier run's copy in
+# /kaggle/working, or re-running this cell after a module was fixed upstream
+# would silently keep the stale code.
+def _attached_code():
+    hits = glob.glob("/kaggle/input/*/knee_common.py")
     return os.path.dirname(hits[0]) if hits else None
 
-CODE_DIR = _locate_code()
+CODE_DIR = _attached_code()
 if CODE_DIR is None:
-    print("step-00 output not attached - cloning the modules (needs internet ON)")
+    print("no attached code dataset - cloning fresh (needs internet ON)")
     subprocess.run(["rm", "-rf", "/kaggle/tmp/repo"], check=False)
     subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", BRANCH, REPO,
                     "/kaggle/tmp/repo"], check=True)
     subprocess.run("cp /kaggle/tmp/repo/rsna_knee/*.py /kaggle/working/",
                    shell=True, check=True)
-    CODE_DIR = _locate_code()
-assert CODE_DIR, ("Could not obtain the modules. Either turn internet ON, or run "
-                  "step 00 and attach its output.")
+    CODE_DIR = "/kaggle/working"
+assert os.path.exists(os.path.join(CODE_DIR, "knee_common.py")), (
+    "Could not obtain the modules. Either turn internet ON, or run step 00 and "
+    "attach its output (Add Data -> Your Work -> Notebook Output).")
+
+# Drop any already-imported copy: Python caches modules, so without this a
+# re-run of this cell keeps the version imported earlier in the session.
+for _m in [m for m in list(sys.modules) if m.startswith("knee_")]:
+    del sys.modules[_m]
 sys.path.insert(0, CODE_DIR)
 print("code from:", CODE_DIR)
 
