@@ -57,14 +57,15 @@ _CHAR_MAP = str.maketrans({
 ANATOMY = {
     "ACL": (r"(anterior cruciate|\bacl\b|\blca\b|lig\w* cruzad\w*|ligamento[s]? cruzad\w*|"
             r"ligament croise anterieur|\bvkb\b|vorderes kreuzband|crociato anteriore|"
-            r"on capraz bag|\bocb\b|anterior capraz|"
+            r"on capraz bag|\bocb\b|anterior capraz|voorste kruisband|kruisband|"
             r"predn\w* krizn\w* ligament|krizn\w* ligament|"
             r"προσθι\w* χιαστ\w*|χιαστ\w*|"
             r"предна кръстна|преден кръстен|кръстн\w* (връзк|лигамент)\w*|"
             r"передн\w* крестообразн\w*|\bпкс\b)"),
     "MCL": (r"(medial collateral|\bmcl\b|\blcm\b|colateral medial|collateral medial|"
             r"ligament collateral (medial|interne)|innenband|mediales seitenband|"
-            r"collaterale mediale|ic yan bag|med[iy]al kollateral|"
+            r"collaterale mediale|ic yan bag|med[iy]al kollateral|binnenband|"
+            r"mediale collaterale band|"
             r"medijaln\w* kolateraln\w*|εσω πλαγι\w*|"
             r"медиал\w* колатерал\w*|вътрешн\w* странич\w*|"
             r"медиальн\w* коллатеральн\w*|внутренн\w* боков\w* связк)"),
@@ -80,15 +81,23 @@ ANATOMY = {
                          r"(латеральн\w*|наружн\w*) мениск\w*)"),
     "Medial OA": (r"((compartiment|compartment|kompartiment|kompartman)\w*\s+(medial|medyal|intern|ic)|"
                   r"(medial|medyal|intern)\w*\s+(compartment|compartiment|kompartiment|kompartman)|"
-                  r"femorotibial\w* (medial|medyal|intern)|medial tibiofemoral|medial joint|"
-                  r"medijaln\w* (kondil|femoraln|tibijaln)\w*|"
+                  r"femorotibia\w* (medial|medyal|intern|mediaal)|(medial|mediaal)\w* femorotibia\w*|"
+                  r"medial tibiofemoral|medial joint|medial femoral condyle|medial tibial plateau|"
+                  r"condilo femoral medial|meseta tibial medial|mediale? (femurcondyl|tibiaplateau)\w*|"
+                  r"med[iy]al (kompartman|femoral kondil|tibial plato)\w*|"
+                  r"εσω (διαμερισμα|μηριαιοκνημιαι|κονδυλ)\w*|"
+                  r"medijaln\w* (kondil|femoraln|tibijaln|kompartment)\w*|"
                   r"(медиал\w*|вътрешн\w*) (отдел|компартимент|кондил|тибиал)\w*|"
                   r"медиал\w* феморал\w*|"
                   r"(медиальн\w*|внутренн\w*) (отдел|компартмент)\w*)"),
     "Lateral OA": (r"((compartiment|compartment|kompartiment|kompartman)\w*\s+(lateral|extern|dis)|"
                    r"(lateral|extern)\w*\s+(compartment|compartiment|kompartiment|kompartman)|"
-                   r"femorotibial\w* (lateral|extern)|lateral tibiofemoral|lateral joint|"
-                   r"lateraln\w* (kondil|femoraln|tibijaln)\w*|"
+                   r"femorotibia\w* (lateral|extern|lateraal)|(lateral|lateraal)\w* femorotibia\w*|"
+                   r"lateral tibiofemoral|lateral joint|lateral femoral condyle|lateral tibial plateau|"
+                   r"condilo femoral lateral|meseta tibial lateral|laterale? (femurcondyl|tibiaplateau)\w*|"
+                   r"lateral (kompartman|femoral kondil|tibial plato)\w*|"
+                   r"εξω (διαμερισμα|μηριαιοκνημιαι|κονδυλ)\w*|"
+                   r"lateraln\w* (kondil|femoraln|tibijaln|kompartment)\w*|"
                    r"(латерал\w*|външн\w*) (отдел|компартимент|кондил|тибиал)\w*|"
                    r"латерал\w* феморал\w*|"
                    r"(латеральн\w*|наружн\w*) (отдел|компартмент)\w*)"),
@@ -99,27 +108,34 @@ ANATOMY = {
               r"пателлофеморальн\w*|бедренно-?надколенник\w*|ретропателлярн\w*)"),
     "Effusion": (r"(effusion|derrame|epanchement|erguss|versamento|joint fluid|"
                  r"liquido articular|hydrops|efuzyon|eklem ici sivi|eklemde sivi|"
+                 r"gewrichtsvocht|vocht in het gewricht|"
                  r"sivi artisi|sivi miktari|izljev|zglobn\w* tekucin\w*|"
                  r"συλλογη υγρου|ενδαρθρικη συλλογη|"
                  r"ставен излив|ставния излив|излив в|"
                  r"выпот\w*|жидкост\w* в полости|синовиальн\w* жидкост\w*)"),
     "Synovitis": (r"(synovitis|sinovitis|synovite|synovialitis|sinovite|sinovit\w*|"
-                  r"synovial (thickening|proliferation)|pannus|υμενιτιδ\w*|"
+                  r"synovial (thickening|proliferation|hypertrophy)|pannus|υμενιτιδ\w*|"
+                  r"sinovyal (kalinlas|hipertrofi|proliferasyon)\w*|"
+                  r"synovia(le)? (verdikking|proliferatie|hypertrofie)|"
+                  r"sinovij\w* (zadebljan|proliferacij|hipertrofij)\w*|"
+                  r"υμενικ\w* (υπερτροφ|παχυνσ)\w*|синовиал\w* (задебел|пролифер)\w*|"
                   r"синовит\w*|утолщени\w* синовиальн\w*)"),
     "Baker's": (r"(baker|popliteal cyst|quiste de baker|kyste poplite|bakerzyste|"
                 r"cisti di baker|poplitealzyste|baker kisti|popliteal kist|"
-                r"bakerova cist\w*|κυστη (του )?baker|"
+                r"bakerova cist\w*|κυστη (του )?baker|bakercyste|poplitea(le)? cyste|"
+                r"киста в подкол\w*|подкол\w* ямка|"
                 r"киста на беикер\w*|беикер\w*|подкол[яе]н\w* киста|"
                 r"подколенн\w* киста)"),
     "Contusion": (r"(contusion|bone bruise|bone marrow (edema|oedema)|edema (oseo|de medula)|"
                   r"knochenmarkodem|edema midollare|medullar\w* edema|marrow oedema|"
-                  r"kemik iligi odem\w*|kontuzyon|kemik odem\w*|edem kosti|"
+                  r"kemik iligi odem\w*|kontuzyon|kemik odem\w*|kostan\w* edem\w*|edem kosti|"
+                  r"botoedeem|beenmergoedeem|"
                   r"kostan\w* kontuzij\w*|οιδημα (του )?μυελου|"
                   r"костномозъчен едем|костно-?мозъчен оток|"
                   r"отек костного мозга|контузи\w*|трабекулярн\w* отек)"),
     "Fracture": (r"(fracture|fractura|frattura|fraktur|kirik|avulsion|avulsiyon|"
                  r"impaction fracture|insufficiency fracture|fissur\w*|prijelom\w*|"
-                 r"καταγμα\w*|фрактур\w*|счупван\w*|"
+                 r"καταγμα\w*|фрактур\w*|счупван\w*|fractuur|"
                  r"перелом\w*|отрыв\w* фрагмент)"),
 }
 
@@ -138,8 +154,10 @@ OA_TERMS = (r"(osteoarthrit|arthros|artros|artroz|artrit|gonarthros|gonartroz|ar
             r"condropat\w*|hondropat\w*|chondropath\w*|"
             r"kikirdak (kayb|incel|hasar)\w*|eklem aralig\w* daral\w*|"
             r"cartilage (loss|thinning|defect)|perdida de cartilago|knorpel|"
+            r"kraakbeen\w*|artrose|chondropathie|ulceras condrales|"
             r"osteophyt|osteofito|osteofit\w*|joint space narrowing|pincement|"
-            r"fisure hrskavice|hrskavic\w* (defekt|stanjen)\w*|"
+            r"fisure hrskavice|hrskavic\w* (defekt|stanjen)\w*|erozivn\w*|"
+            r"ostecen\w* hrskavic\w*|degenerativn\w* promjen\w*|stanjenj\w*|"
             r"χονδροπαθει\w*|χονδρομαλακ\w*|οστεοαρθριτ\w*|οστεοφυτ\w*|"
             r"хондропат\w*|остеофит\w*|изтънен\w*|дегенеративн\w* промен\w*|"
             r"артроз\w*|хондромаляц\w*|сужени\w* суставн\w* щели|"
@@ -149,7 +167,7 @@ OA_TERMS = (r"(osteoarthrit|arthros|artros|artroz|artrit|gonarthros|gonartroz|ar
 # Germanic, Slavic and Greek.
 NEGATION = (r"(no |not |without |sin |sans |kein |keine |nessun|negative for|"
             r"unremarkable|intact|normal|integr\w*|ausgeschlossen|descartad|"
-            r"bez |uredn\w*|"
+            r"bez |uredn\w*|geen |zonder |normaal|ongestoord|"
             r"δεν |χωρις|φυσιολογικ\w*|"
             r"няма|без особености|\bб\.о\.|не се|"
             r"\bne \b|без |отсутств\w*)")
@@ -169,6 +187,29 @@ NEGATION_AFTER = (r"(izlenmedi|izlenmemis\w*|saptanmadi|saptanmamis\w*|gozlenmed
                   r"не се (визуализира|проследява|установява)\w*|"
                   r"не выявлен\w*|не определя\w*|не отмеча\w*|не визуализир\w*|"
                   r"отсутств\w*|интактн\w*|сохранен\w*)")
+
+# Severity qualifiers.  A binary "the report mentions an effusion" rule fires
+# on 83% of this corpus while only 60% of annotated studies are positive - the
+# discriminating signal is how much, not whether.  Grading turns the rule into
+# a ranked score, which is what a metric built on AUC rewards.
+MILD = (r"(minimal|trace|tiny|small|slight|mild|discret\w*|leve|escas\w*|scars\w*|"
+        r"gering\w*|weinig|klein|hafif|az miktarda|blag\w*|"
+        r"минимал\w*|малк\w*|неголям\w*|ελαφρ\w*|μικρ\w*)")
+SEVERE = (r"(large|gross|massive|marked|severe|significant|abundant|advanced|"
+          r"importante|grande|avanzad\w*|ausgepragt|gevorderd|uitgebreid|belangrijk|"
+          r"belirgin|yaygin|masif|ileri derecede|"
+          r"голям\w*|изразен\w*|обилен|значител\w*|εκτεταμεν\w*|μεγαλ\w*|"
+          r"velik\w*|obilan|uznapredoval\w*)")
+
+
+def _grade(chunk: str) -> float:
+    """Confidence for a hit, from the severity words around it."""
+    if re.search(SEVERE, chunk):
+        return 1.0
+    if re.search(MILD, chunk):
+        return 0.35
+    return 0.7
+
 
 SENT_BREAK = re.compile(r"[.;\n]")
 
@@ -253,7 +294,7 @@ def anatomy_spans(text: str) -> list:
 
 
 def window_hit(text: str, anat: str, finding: str, span: int = 90,
-               label: Optional[str] = None, spans: Optional[list] = None) -> int:
+               label: Optional[str] = None, spans: Optional[list] = None) -> float:
     """1 if a finding term sits in the same clause as an anatomy term, within
     `span` characters, is not negated on either side, and is closer to THIS
     structure than to any other structure mentioned in the report.
@@ -284,24 +325,25 @@ def window_hit(text: str, anat: str, finding: str, span: int = 90,
                      and _span_distance(s2, e2, f_lo, f_hi) < mine
                      for s2, e2, lab2 in spans)
         if not stolen:
-            return 1
-    return 0
+            return _grade(chunk)
+    return 0.0
 
 
 def rule_features(text: str) -> np.ndarray:
-    """Twelve binary rule hits, in LABELS order."""
+    """Twelve graded rule scores in LABELS order: 0 for no hit or a negated
+    one, then 0.35 / 0.7 / 1.0 by severity. Binarise at >0.5 where a hard
+    label is needed."""
     f = np.zeros(N_LABELS, np.float32)
     spans = anatomy_spans(text)
     for i, lab in enumerate(LABELS):
         anat = ANATOMY[lab]
         if lab in STANDALONE:
-            hit = 0
+            hit = 0.0
             for m in re.finditer(anat, text):
                 lo, hi = _clause_bounds(text, m.start())
                 chunk = text[lo:hi]
                 if not _negated(chunk, m.start() - lo, m.end() - lo):
-                    hit = 1
-                    break
+                    hit = max(hit, _grade(chunk))
             f[i] = hit
         elif lab in OA_LABELS:
             f[i] = window_hit(text, anat, OA_TERMS, label=lab, spans=spans)

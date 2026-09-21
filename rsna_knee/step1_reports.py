@@ -101,18 +101,21 @@ kc.print_auc_table(macro, per)
 # Precision matters more than recall: the rules are both the teacher's training
 # target and an input feature, and a noisy target is worse than a sparse one.
 from sklearn.metrics import precision_score, recall_score
-print("per-label precision / recall, over annotated cells only")
+# The rules are graded now (0 / 0.35 / 0.7 / 1.0 by severity), so precision and
+# recall need a hard threshold. The AUC above uses the grades directly.
+RB = (R > 0.5).astype(np.float32)
+print("per-label precision / recall at threshold 0.5, over annotated cells only")
 prec = {}
 for i, c in enumerate(kc.LABELS):
     sel = GOLD_M[:, i] > 0
     if sel.sum() == 0:
         print(f"  {c:<18s} no annotated cells")
         continue
-    p = precision_score(Y[sel, i], R[sel, i], zero_division=0)
-    r = recall_score(Y[sel, i], R[sel, i], zero_division=0)
+    p = precision_score(Y[sel, i], RB[sel, i], zero_division=0)
+    r = recall_score(Y[sel, i], RB[sel, i], zero_division=0)
     prec[c] = p
-    print(f"  {c:<18s} P={p:.3f} R={r:.3f}  fires {R[sel, i].mean():.1%} "
-          f"of annotated, {R[:, i].mean():.1%} of all 4,407  true {Y[sel, i].mean():.1%}")
+    print(f"  {c:<18s} P={p:.3f} R={r:.3f}  fires {RB[sel, i].mean():.1%} "
+          f"of annotated, {RB[:, i].mean():.1%} of all 4,407  true {Y[sel, i].mean():.1%}")
 
 # A label below ~0.6 precision is a lexicon bug, not a hard label.  These are
 # the reports to read before editing knee_text.py.
@@ -121,11 +124,11 @@ if prec:
     wi = kc.LABELS.index(worst)
     sel = GOLD_M[:, wi] > 0
     print(f"\nworst precision: {worst} ({prec[worst]:.3f}) - false positives:")
-    fp = np.where(sel & (R[:, wi] == 1) & (Y[:, wi] == 0))[0][:3]
+    fp = np.where(sel & (RB[:, wi] == 1) & (Y[:, wi] == 0))[0][:3]
     for j in fp:
         print("   ...", train.iloc[j]["rep"][:300], "\n")
     print(f"missed positives ({worst}):")
-    fn = np.where(sel & (R[:, wi] == 0) & (Y[:, wi] == 1))[0][:3]
+    fn = np.where(sel & (RB[:, wi] == 0) & (Y[:, wi] == 1))[0][:3]
     for j in fn:
         print("   ...", train.iloc[j]["rep"][:300], "\n")
 

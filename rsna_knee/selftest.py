@@ -123,6 +123,22 @@ LEXICON_CASES = [
      {'Effusion', 'Medial Meniscus', 'Medial OA'}, set()),
     ('ligamentos cruzados y colaterales dentro de limites normales.',
      set(), {'ACL'}),
+    ('gevorderd lateraal femorotibiaal kraakbeenlijden met volledig kraakbeenverlies anterieur en van het laterale tibiaplateau',
+     {'Lateral OA'}, {'Medial OA'}),
+    ('ulceras condrales de espesor total de la region central y de carga del condilo femoral medial',
+     {'Medial OA'}, {'Lateral OA'}),
+    ('small joint effusion with synovial thickening compatible with synovitis. there is popliteal cyst measuring 21 x 17 x 35 mm.',
+     {'Synovitis', 'Effusion', "Baker's"}, set()),
+    ('kostani edem medijalnog kondila femura.',
+     {'Contusion'}, set()),
+    ('erozivne promjene zglobne hrskavice medijalnog kompartmenta femorotibijalnog zgloba.',
+     {'Medial OA'}, {'Lateral OA'}),
+    ('geen vocht in het gewricht. voorste kruisband ongestoord.',
+     set(), {'ACL', 'Effusion'}),
+    ('mr knie rechts. bevindingen: ruptuur van de voorste kruisband.',
+     {'ACL'}, set()),
+    ('zglobna hrskavica medijalnog kompartmenta uredna.',
+     set(), {'Medial OA'}),
 ]
 
 
@@ -179,6 +195,17 @@ def test_lexicon():
     unnormalised = [(n, c) for n, p in pats.items() for c in set(p)
                     if c.isalpha() and norm_text(c) != c]
     assert not unnormalised, f"patterns hold characters norm_text alters: {unnormalised}"
+
+    # Grading check: the same finding must rank by severity, since the rules
+    # feed an AUC-scored pipeline and a flat binary cannot separate a trace
+    # effusion from a large one.
+    eff = kc.LABELS.index("Effusion")
+    grades = [rule_features(norm_text(t))[eff] for t in
+              ("Large joint effusion.", "Joint effusion.", "Minimal joint effusion.",
+               "No joint effusion.")]
+    assert grades[0] > grades[1] > grades[2] > grades[3] == 0, grades
+    print(f"[13b] severity grading: large {grades[0]:.2f} > plain {grades[1]:.2f} "
+          f"> minimal {grades[2]:.2f} > negated {grades[3]:.2f}")
 
     bad = []
     for txt, must, mustnot in LEXICON_CASES:
