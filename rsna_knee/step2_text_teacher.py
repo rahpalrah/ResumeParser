@@ -87,10 +87,20 @@ OUT = "/kaggle/working"
 
 MODEL_NAME = "xlm-roberta-base"   # the reports are in several languages
 MAX_LEN = 512
-EPOCHS = 3
+EPOCHS = 6            # 3 left both curves still climbing - it had not converged
 BS = 8
-LR = 2e-5
+LR = 2e-5             # encoder
+HEAD_LR = 1e-3        # the head needs a far higher rate to fit in a few epochs
 VAL_FRAC = 0.1
+
+# Feeding the rule scores in as FEATURES was a mistake. The teacher is trained
+# to predict those same scores, so a linear head solves the task by copying
+# them, the held-out rule AUC measures copying rather than reading, and the
+# output lands as "rules plus noise" - measured at 0.757 against the rules'
+# own 0.767. Text only: the model must read the report, and the metric then
+# means what it says. The rules are combined with the teacher afterwards, in
+# cell 4, where the combination can be measured instead of assumed.
+USE_RULE_INPUT = False
 DEV = "cuda"
 kc.seed_everything(42)
 
@@ -161,24 +171,27 @@ class ReportDS(Dataset):
 
 
 class ReportTeacher(nn.Module):
-    """Encoder mean-pool concatenated with the rule hits.
+    """Encoder mean-pool -> twelve logits.
 
-    Feeding the rules in explicitly is not redundant with the encoder: it gives
-    the head a calibrated, language-agnostic prior, and it means the teacher can
-    never do worse than the rules on a phrasing the rules already handle."""
+    Text only by default. The whole point of self-training is that the model
+    reads phrasings the lexicon misses; handing it the lexicon's answer as an
+    input removes the pressure to learn that."""
 
-    def __init__(self, name=MODEL_NAME):
+    def __init__(self, name=MODEL_NAME, use_rule=USE_RULE_INPUT):
         super().__init__()
         self.enc = AutoModel.from_pretrained(name)
         h = self.enc.config.hidden_size
+        self.use_rule = use_rule
         self.drop = nn.Dropout(0.1)
-        self.head = nn.Linear(h + kc.N_LABELS, kc.N_LABELS)
+        self.head = nn.Linear(h + (kc.N_LABELS if use_rule else 0), kc.N_LABELS)
 
     def forward(self, input_ids, attention_mask, rule):
         out = self.enc(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
         m = attention_mask.unsqueeze(-1).float()
-        pooled = (out * m).sum(1) / m.sum(1).clamp(min=1e-6)
-        return self.head(torch.cat([self.drop(pooled), rule], dim=-1))
+        pooled = self.drop((out * m).sum(1) / m.sum(1).clamp(min=1e-6))
+        if self.use_rule:
+            pooled = torch.cat([pooled, rule], dim=-1)
+        return self.head(pooled)
 
 
 tok = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -207,7 +220,9 @@ def predict(model, loader):
 
 
 model = ReportTeacher().to(DEV)
-opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
+opt = torch.optim.AdamW(
+    [{"params": model.enc.parameters(), "lr": LR},
+     {"params": model.head.parameters(), "lr": HEAD_LR}], weight_decay=0.01)
 steps = len(dl_tr) * EPOCHS
 sch = get_cosine_schedule_with_warmup(opt, int(0.06 * steps), steps)
 scaler = kc.make_grad_scaler()
@@ -259,9 +274,26 @@ print(f"\n  n={len(gold_df)}: a sanity check, not a leaderboard estimate.")
 dl_all = DataLoader(ReportDS(train, tok), batch_size=BS * 2, num_workers=2)
 SOFT = predict(model, dl_all)
 
-# Gold wins wherever it exists; the teacher fills every other cell.
+# Combine the two signals rather than betting on one. They fail differently:
+# the lexicon is precise and low-recall, the teacher fires on paraphrases the
+# lexicon never saw. All three are measured below on the gold studies, but the
+# blend is NOT tuned against them - at n=58 a tenth of a point is one study
+# changing rank, and selecting on that is just fitting noise.
+RULE_P = train[rule_cols].values.astype(np.float32)
+BLEND = 0.5 * RULE_P + 0.5 * SOFT
+
+print("\ngold-study macro AUC of each candidate target:")
+for name, P in [("rules alone", RULE_P), ("teacher alone", SOFT),
+                ("50/50 blend", BLEND)]:
+    m, _ = kc.macro_auc(train[kc.LABELS].fillna(0.0).values.astype(np.float32),
+                        P, mask=GOLD)
+    print(f"  {name:<14s} {m:.5f}")
+print(f"  n={int(gold_rows.sum())}: these are within noise of each other. The "
+      f"blend is the hedge, not the winner.")
+
+# Gold wins wherever it exists; the blend fills every other cell.
 GOLD_VALS = train[kc.LABELS].fillna(0.0).values.astype(np.float32)
-TARGET = np.where(GOLD > 0, GOLD_VALS, SOFT)
+TARGET = np.where(GOLD > 0, GOLD_VALS, BLEND)
 
 targets = pd.DataFrame(TARGET, columns=kc.LABELS)
 targets.insert(0, "StudyInstanceUID", train["StudyInstanceUID"].values)
@@ -270,8 +302,7 @@ for i, c in enumerate(kc.LABELS):
 targets.to_parquet(f"{OUT}/study_targets.parquet", index=False)
 
 print(f"\nstudy_targets.parquet {targets.shape}")
-print(f"  gold cells    : {int(GOLD.sum()):,} of {GOLD.size:,}")
-print("\nteacher mean probability vs rule firing rate, per label")
+print("\nper label: teacher mean / rule mean / blend mean")
 for i, c in enumerate(kc.LABELS):
-    print(f"  {c:<18s} teacher {SOFT[:, i].mean():.3f}   "
-          f"rules {Y_RULE[:, i].mean():.3f}")
+    print(f"  {c:<18s} {SOFT[:, i].mean():.3f}  {RULE_P[:, i].mean():.3f}  "
+          f"{BLEND[:, i].mean():.3f}")
