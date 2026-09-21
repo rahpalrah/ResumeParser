@@ -15,12 +15,31 @@
 # --- CELL 1 -----------------------------------------------------------------
 # !pip install -q pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm
 
-# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
-# unpredictable folder name, so find it by content rather than by name.
-import os, sys, glob
-_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
-assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
-CODE_DIR = os.path.dirname(_c[0])
+# Bootstrap.  Uses the step-00 output when it is attached, and fetches the
+# modules itself when it is not - so this notebook runs standalone with internet
+# ON, and off the attached output when internet is OFF.
+import os, sys, glob, subprocess
+
+REPO = "https://github.com/rahpalrah/ResumeParser"
+BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
+
+def _locate_code():
+    hits = (glob.glob("/kaggle/input/*/knee_common.py")
+            + glob.glob("/kaggle/working/knee_common.py"))
+    return os.path.dirname(hits[0]) if hits else None
+
+CODE_DIR = _locate_code()
+if CODE_DIR is None:
+    print("step-00 output not attached - cloning the modules (needs internet ON)")
+    subprocess.run(["rm", "-rf", "/kaggle/tmp/repo"], check=False)
+    subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", BRANCH, REPO,
+                    "/kaggle/tmp/repo"], check=True)
+    subprocess.run("cp /kaggle/tmp/repo/rsna_knee/*.py /kaggle/working/",
+                   shell=True, check=True)
+    CODE_DIR = _locate_code()
+assert CODE_DIR, ("Could not obtain the modules. Either turn internet ON, or run "
+                  "step 00 and attach its output (Add Data -> Your Work -> "
+                  "Notebook Output).")
 sys.path.insert(0, CODE_DIR)
 print("code from:", CODE_DIR)
 
@@ -29,7 +48,8 @@ import numpy as np, pandas as pd
 from multiprocessing import Pool
 import knee_common as kc
 
-COMP = "/kaggle/input/rsna-knee-abnormalities-detection"
+COMP = kc.find_comp_dir()          # autodetected: never hard-code the slug
+print("competition data:", COMP)
 OUT = "/kaggle/working"
 
 SHARD = 0            # <-- CHANGE THIS each run: 0,1,2,...,NUM_SHARDS-1
@@ -40,6 +60,8 @@ N_PROC = 4           # Kaggle CPU notebooks expose 4 vCPU
 CFG = kc.Cfg(comp_dir=COMP, cache_dir=f"{OUT}/cache")
 os.makedirs(CFG.cache_dir, exist_ok=True)
 
+SERIES_ROOT = kc.find_series_root(COMP, SPLIT)
+print("DICOM root:", SERIES_ROOT)
 series = pd.read_csv(f"{COMP}/{SPLIT}_series.csv")
 # Only series that win a slot are ever read by the model, so only those are
 # decoded.  On a typical study that is 4 of 5-7 series - a third of the work
@@ -79,7 +101,7 @@ def read_laterality(series_dir: str) -> int:
 
 
 def work(rec: dict) -> dict:
-    sdir = os.path.join(COMP, f"{SPLIT}_series", rec["StudyInstanceUID"],
+    sdir = os.path.join(SERIES_ROOT, rec["StudyInstanceUID"],
                         rec["SeriesInstanceUID"])
     out = dict(rec); out["ok"] = 0; out["Laterality"] = 2; out["kb"] = 0
     dst = kc.sprite_path(CFG.cache_dir, rec["StudyInstanceUID"], rec["SeriesInstanceUID"])

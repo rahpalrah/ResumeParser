@@ -19,12 +19,31 @@
 #   W = glob.glob("/kaggle/input/*/wheels")[0]
 #   !pip install -q --no-index --find-links={W} \
 #       pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm
-# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
-# unpredictable folder name, so find it by content rather than by name.
-import os, sys, glob
-_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
-assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
-CODE_DIR = os.path.dirname(_c[0])
+# Bootstrap.  Uses the step-00 output when it is attached, and fetches the
+# modules itself when it is not - so this notebook runs standalone with internet
+# ON, and off the attached output when internet is OFF.
+import os, sys, glob, subprocess
+
+REPO = "https://github.com/rahpalrah/ResumeParser"
+BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
+
+def _locate_code():
+    hits = (glob.glob("/kaggle/input/*/knee_common.py")
+            + glob.glob("/kaggle/working/knee_common.py"))
+    return os.path.dirname(hits[0]) if hits else None
+
+CODE_DIR = _locate_code()
+if CODE_DIR is None:
+    print("step-00 output not attached - cloning the modules (needs internet ON)")
+    subprocess.run(["rm", "-rf", "/kaggle/tmp/repo"], check=False)
+    subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", BRANCH, REPO,
+                    "/kaggle/tmp/repo"], check=True)
+    subprocess.run("cp /kaggle/tmp/repo/rsna_knee/*.py /kaggle/working/",
+                   shell=True, check=True)
+    CODE_DIR = _locate_code()
+assert CODE_DIR, ("Could not obtain the modules. Either turn internet ON, or run "
+                  "step 00 and attach its output (Add Data -> Your Work -> "
+                  "Notebook Output).")
 sys.path.insert(0, CODE_DIR)
 print("code from:", CODE_DIR)
 
@@ -36,13 +55,15 @@ from knee_common import LABELS, N_SLOTS, PLANE2IDX, assign_slots
 from knee_data import _to_25d, collate
 from knee_model import CareNet
 
-COMP = "/kaggle/input/rsna-knee-abnormalities-detection"
+COMP = kc.find_comp_dir()          # autodetected: never hard-code the slug
+print("competition data:", COMP)
 CKPTS = sorted(glob.glob("/kaggle/input/*/carenet_f*.pt"))
 assert CKPTS, "Attach the step-4 notebook outputs (carenet_f*.pt)"
 DEV = "cuda"
 USE_TTA = True
 T_BUDGET_S = 7.5 * 3600      # leave headroom inside the 9 h cap
 
+TEST_ROOT = kc.find_series_root(COMP, "test")
 test = pd.read_csv(f"{COMP}/test.csv")
 tser = pd.read_csv(f"{COMP}/test_series.csv")
 tser = pd.concat([assign_slots(g) for _, g in tser.groupby("StudyInstanceUID")])
@@ -103,7 +124,7 @@ class TestStudyDS(Dataset):
             if not cand:
                 continue
             rec = cand[0]
-            sdir = os.path.join(COMP, "test_series", uid, rec["SeriesInstanceUID"])
+            sdir = os.path.join(TEST_ROOT, uid, rec["SeriesInstanceUID"])
             vol = kc.load_series_volume(sdir, K, Z)
             if vol is None:
                 continue

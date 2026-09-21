@@ -80,6 +80,33 @@ LEXICON_CASES = [
 ]
 
 
+def test_path_discovery():
+    """The competition slug and mount layout have both moved before; nothing in
+    the pipeline may hard-code them."""
+    root = tempfile.mkdtemp(prefix="kaggleinput_")
+    try:
+        decoy = os.path.join(root, "someones-dataset")
+        os.makedirs(decoy)
+        open(os.path.join(decoy, "sample_submission.csv"), "w").close()
+
+        real = os.path.join(root, "competitions", "rsna-knee-abnormality-detection")
+        os.makedirs(os.path.join(real, "train_series"))
+        for f in ("sample_submission.csv", "train_series.csv", "test_series.csv"):
+            open(os.path.join(real, f), "w").close()
+
+        found = kc.find_comp_dir(root=root)
+        assert found == real, f"picked the decoy: {found}"
+        assert kc.find_series_root(found, "train") == os.path.join(real, "train_series")
+        try:
+            kc.find_comp_dir(root=os.path.join(root, "nothing-here"))
+            raise AssertionError("missing data should raise")
+        except FileNotFoundError:
+            pass
+        print("[12] competition path autodetected past a decoy; missing data raises clearly")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_lexicon():
     """The report rules decide the teacher's floor - a leaked negation here
     poisons every soft label downstream, so they get real cases."""
@@ -93,7 +120,7 @@ def test_lexicon():
     for t, miss, extra in bad:
         print(f"    LEXICON FAIL {t[:60]!r} missing={miss} false={extra}")
     assert not bad, f"{len(bad)}/{len(LEXICON_CASES)} lexicon cases failed"
-    print(f"[12] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass")
+    print(f"[13] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass")
 
 
 def test_train_loop(studies, series_df, y, cfg, tmp):
@@ -122,7 +149,7 @@ def test_train_loop(studies, series_df, y, cfg, tmp):
         if i >= 1:
             break
     assert not torch.allclose(before, model.head.base.weight), "weights did not move"
-    print(f"[13] two optimiser steps ran; head weight moved by "
+    print(f"[14] two optimiser steps ran; head weight moved by "
           f"{(model.head.base.weight - before).abs().mean().item():.2e}")
 
     # eval path must produce one row per study and a finite AUC
@@ -138,7 +165,7 @@ def test_train_loop(studies, series_df, y, cfg, tmp):
     assert P.shape == (len(studies), kc.N_LABELS), P.shape
     m, _ = kc.macro_auc(Y, P)
     assert np.isfinite(m)
-    print(f"[14] eval produced {P.shape} predictions, macro AUC {m:.3f}")
+    print(f"[15] eval produced {P.shape} predictions, macro AUC {m:.3f}")
 
     # checkpoint round trip exactly as step 5 does it
     ckpt = os.path.join(tmp, "ck.pt")
@@ -154,7 +181,7 @@ def test_train_loop(studies, series_df, y, cfg, tmp):
         a = torch.sigmoid(ema.ema(b)["logits"])
         c = torch.sigmoid(m2(b)["logits"])
     assert torch.allclose(a, c, atol=1e-5), (a - c).abs().max().item()
-    print("[15] checkpoint save/reload reproduces identical predictions")
+    print("[16] checkpoint save/reload reproduces identical predictions")
 
 
 def main():
@@ -241,6 +268,7 @@ def main():
         assert len(set(folds.tolist())) > 1
         print(f"[11] folds {folds.tolist()}")
 
+        test_path_discovery()
         test_lexicon()
         test_train_loop(studies, series_df, y, cfg, tmp)
         print("\nALL SELF-TESTS PASSED")

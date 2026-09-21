@@ -13,12 +13,31 @@
 
 # --- CELL 1 -----------------------------------------------------------------
 # !pip install -q iterative-stratification
-# Locate the step-00 bootstrap output.  Attached notebook outputs land under an
-# unpredictable folder name, so find it by content rather than by name.
-import os, sys, glob
-_c = glob.glob("/kaggle/input/*/knee_common.py") + glob.glob("/kaggle/working/knee_common.py")
-assert _c, "Attach the step-00 notebook output (Add Data -> Your Work -> Notebook Output)"
-CODE_DIR = os.path.dirname(_c[0])
+# Bootstrap.  Uses the step-00 output when it is attached, and fetches the
+# modules itself when it is not - so this notebook runs standalone with internet
+# ON, and off the attached output when internet is OFF.
+import os, sys, glob, subprocess
+
+REPO = "https://github.com/rahpalrah/ResumeParser"
+BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
+
+def _locate_code():
+    hits = (glob.glob("/kaggle/input/*/knee_common.py")
+            + glob.glob("/kaggle/working/knee_common.py"))
+    return os.path.dirname(hits[0]) if hits else None
+
+CODE_DIR = _locate_code()
+if CODE_DIR is None:
+    print("step-00 output not attached - cloning the modules (needs internet ON)")
+    subprocess.run(["rm", "-rf", "/kaggle/tmp/repo"], check=False)
+    subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", BRANCH, REPO,
+                    "/kaggle/tmp/repo"], check=True)
+    subprocess.run("cp /kaggle/tmp/repo/rsna_knee/*.py /kaggle/working/",
+                   shell=True, check=True)
+    CODE_DIR = _locate_code()
+assert CODE_DIR, ("Could not obtain the modules. Either turn internet ON, or run "
+                  "step 00 and attach its output (Add Data -> Your Work -> "
+                  "Notebook Output).")
 sys.path.insert(0, CODE_DIR)
 print("code from:", CODE_DIR)
 
@@ -28,7 +47,8 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel, get_cosine_schedule_with_warmup
 import knee_common as kc
 
-COMP = "/kaggle/input/rsna-knee-abnormalities-detection"
+COMP = kc.find_comp_dir()          # autodetected: never hard-code the slug
+print("competition data:", COMP)
 OUT = "/kaggle/working"
 MODEL_NAME = "xlm-roberta-base"     # multilingual by construction; the reports
                                     # are in several languages

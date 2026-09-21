@@ -124,8 +124,19 @@ glob.glob("/kaggle/input/*/carenet_f*.pt")         # the weights, from step 4
 
 So you never have to name a dataset exactly right. Attach a previous
 notebook's output with **Add Data → Your Work → Notebook Output** and it is
-found. If a required input is missing the notebook raises an `assert` with the
-name of the step to run, rather than failing halfway through.
+found. If a required input is missing the notebook raises an `assert` naming
+the step to run, rather than failing halfway through.
+
+Two things are handled for you and should never be typed by hand:
+
+- **The code.** If the step-00 output is not attached, each step clones the
+  repo itself (internet ON). Only step 5 truly needs the attachment, because
+  its internet is off.
+- **The competition path.** `kc.find_comp_dir()` searches `/kaggle/input` for a
+  file only this competition has, so neither the mount layout
+  (`/kaggle/input/<slug>/` vs `/kaggle/input/competitions/<slug>/`) nor the
+  slug spelling (`abnormality` vs `abnormalities`) can break a notebook. Every
+  step prints the directory it resolved as its second line.
 
 Each step ends with **Save Version → Save & Run All (Commit)**, which turns its
 output into something the next step can attach.

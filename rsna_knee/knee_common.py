@@ -117,6 +117,42 @@ CFG_EFFICIENCY = Cfg(
 )
 
 
+def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.csv") -> str:
+    """Locate the competition data wherever Kaggle chose to mount it.
+
+    Kaggle has used several layouts (/kaggle/input/<slug>/ and
+    /kaggle/input/competitions/<slug>/), and the slug itself is easy to mistype
+    - "abnormality" vs "abnormalities" costs a debugging cycle every time.  So
+    nothing in this pipeline hard-codes the path: it searches for a file only
+    this competition has.
+    """
+    hits: List[str] = []
+    for depth in ("*", "*/*"):
+        hits += glob.glob(os.path.join(root, depth, marker))
+    if not hits:
+        raise FileNotFoundError(
+            f"No {marker} found under {root}. Add the competition data to this "
+            "notebook: Add Data -> Competitions -> RSNA Knee Abnormalities Detection."
+        )
+    # Prefer a directory that also carries the series manifests - that rules out
+    # a stray copy of the file inside somebody else's attached dataset.
+    for h in hits:
+        d = os.path.dirname(h)
+        if os.path.exists(os.path.join(d, "train_series.csv")) or \
+           os.path.exists(os.path.join(d, "test_series.csv")):
+            return d
+    return os.path.dirname(hits[0])
+
+
+def find_series_root(comp_dir: str, split: str) -> str:
+    """Directory holding the per-study DICOM folders for `split`."""
+    for name in (f"{split}_series", f"{split}_images", split):
+        p = os.path.join(comp_dir, name)
+        if os.path.isdir(p):
+            return p
+    raise FileNotFoundError(f"no {split}_series/ directory under {comp_dir}")
+
+
 def seed_everything(seed: int = 42) -> None:
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
