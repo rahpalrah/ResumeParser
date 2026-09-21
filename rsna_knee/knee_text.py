@@ -104,6 +104,7 @@ ANATOMY = {
     "PF OA": (r"(patellofemoral|patelo?femoral|femoropatellar|femoro-?patellaire|"
               r"retropatellar|patellarruckflache|trochlea|troklea|trohlear|"
               r"patelofemoraln\w*|fasete patele|επιγονατιδομηριαι\w*|"
+              r"patel\w*|rotul\w*|επιγονατιδ\w*|надколенник\w*|"
               r"пателофеморал\w*|ретропателар\w*|пателарн\w*|"
               r"пателлофеморальн\w*|бедренно-?надколенник\w*|ретропателлярн\w*)"),
     "Effusion": (r"(effusion|derrame|epanchement|erguss|versamento|joint fluid|"
@@ -153,7 +154,8 @@ OA_TERMS = (r"(osteoarthrit|arthros|artros|artroz|artrit|gonarthros|gonartroz|ar
             r"chondromalac|condromalac|kondromalaz\w*|hondromalacij\w*|"
             r"condropat\w*|hondropat\w*|chondropath\w*|"
             r"kikirdak (kayb|incel|hasar)\w*|eklem aralig\w* daral\w*|"
-            r"cartilage (loss|thinning|defect)|perdida de cartilago|knorpel|"
+            r"cartilage (loss|thinning|defect)|chondral (thinning|loss|defect|ulcer|fissur|wear)\w*|"
+            r"perdida de cartilago|knorpel|"
             r"kraakbeen\w*|artrose|chondropathie|ulceras condrales|"
             r"osteophyt|osteofito|osteofit\w*|joint space narrowing|pincement|"
             r"fisure hrskavice|hrskavic\w* (defekt|stanjen)\w*|erozivn\w*|"
@@ -192,18 +194,38 @@ NEGATION_AFTER = (r"(izlenmedi|izlenmemis\w*|saptanmadi|saptanmamis\w*|gozlenmed
 # on 83% of this corpus while only 60% of annotated studies are positive - the
 # discriminating signal is how much, not whether.  Grading turns the rule into
 # a ranked score, which is what a metric built on AUC rewards.
+# Radiology grades carry more signal here than adjectives do. The convention is
+# near-universal: grade I-II meniscal signal is intrasubstance degeneration and
+# does not reach the surface, grade III does and is a tear; grade I-II
+# chondromalacia is early, grade III-IV is full-thickness cartilage loss. So a
+# report's own grade separates the positives far better than "mild" or "severe"
+# ever will, and it is written the same way in every language here.
 MILD = (r"(minimal|trace|tiny|small|slight|mild|discret\w*|leve|escas\w*|scars\w*|"
         r"gering\w*|weinig|klein|hafif|az miktarda|blag\w*|"
+        r"grade (i|ii|1|2)\b|grado (i|ii|1|2)\b|derece (1|2)\b|evre (1|2)\b|"
+        r"stupanj (1|2)\b|βαθμου? (i|ii|1|2)\b|степен (1|2)\b|"
+        r"(i|ii|1|2)\.? ?(stupanj|derece|evre|степен|βαθμ\w*)|"
         r"минимал\w*|малк\w*|неголям\w*|ελαφρ\w*|μικρ\w*)")
 SEVERE = (r"(large|gross|massive|marked|severe|significant|abundant|advanced|"
           r"importante|grande|avanzad\w*|ausgepragt|gevorderd|uitgebreid|belangrijk|"
           r"belirgin|yaygin|masif|ileri derecede|"
+          r"grade (iii|iv|3|4)\b|grado (iii|iv|3|4)\b|derece (3|4)\b|evre (3|4)\b|"
+          r"stupanj (3|4)\b|βαθμου? (iii|iv|3|4)\b|степен (3|4)\b|"
+          r"(iii|iv|3|4)\.? ?(stupanj|derece|evre|степен|βαθμ\w*)|"
+          r"full.?thickness|espesor total|volledig\w*|komplet\w*|complet[ao]|"
           r"голям\w*|изразен\w*|обилен|значител\w*|εκτεταμεν\w*|μεγαλ\w*|"
           r"velik\w*|obilan|uznapredoval\w*)")
 
 
 def _grade(chunk: str) -> float:
-    """Confidence for a hit, from the severity words around it."""
+    """Confidence for a hit, from the severity words around it.
+
+    Graded on a window wider than the clause, because an ordinal grade carries
+    its own full stop: "2. stupanj hondromalacije" is split by clause detection
+    into "...(2" and "stupanj...", which would hide the grade from a
+    clause-scoped search. Severity is a soft signal, so a wider window is
+    cheap; the finding itself stays clause-scoped.
+    """
     if re.search(SEVERE, chunk):
         return 1.0
     if re.search(MILD, chunk):
@@ -325,7 +347,7 @@ def window_hit(text: str, anat: str, finding: str, span: int = 90,
                      and _span_distance(s2, e2, f_lo, f_hi) < mine
                      for s2, e2, lab2 in spans)
         if not stolen:
-            return _grade(chunk)
+            return _grade(text[max(0, m.start() - 70):m.end() + 70])
     return 0.0
 
 
@@ -343,7 +365,7 @@ def rule_features(text: str) -> np.ndarray:
                 lo, hi = _clause_bounds(text, m.start())
                 chunk = text[lo:hi]
                 if not _negated(chunk, m.start() - lo, m.end() - lo):
-                    hit = max(hit, _grade(chunk))
+                    hit = max(hit, _grade(text[max(0, m.start() - 70):m.end() + 70]))
             f[i] = hit
         elif lab in OA_LABELS:
             f[i] = window_hit(text, anat, OA_TERMS, label=lab, spans=spans)

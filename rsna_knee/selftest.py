@@ -139,6 +139,16 @@ LEXICON_CASES = [
      {'ACL'}, set()),
     ('zglobna hrskavica medijalnog kompartmenta uredna.',
      set(), {'Medial OA'}),
+    ('hondromalacija patele 4. stupanj, potpuni gubitak hrskavice.',
+     {'PF OA'}, set()),
+    ('patellar kondromalazi 3. derece.',
+     {'PF OA'}, set()),
+    ('chondral thinning of the patella, grade 3.',
+     {'PF OA'}, set()),
+    ('distal kuadriseps ve patellar tendonlar normaldir.',
+     set(), {'PF OA'}),
+    ('the patellar cartilage is normal.',
+     set(), {'PF OA'}),
 ]
 
 
@@ -204,8 +214,16 @@ def test_lexicon():
               ("Large joint effusion.", "Joint effusion.", "Minimal joint effusion.",
                "No joint effusion.")]
     assert grades[0] > grades[1] > grades[2] > grades[3] == 0, grades
+
+    # Radiology grades, which carry far more signal than adjectives: grade I-II
+    # meniscal signal is intrasubstance degeneration, grade III is a tear.
+    mm = kc.LABELS.index("Medial Meniscus")
+    g2 = rule_features(norm_text("Grade 2 signal in the medial meniscus."))[mm]
+    g3 = rule_features(norm_text("Grade 3 tear of the medial meniscus."))[mm]
+    assert g3 > g2 > 0, (g2, g3)
     print(f"[13b] severity grading: large {grades[0]:.2f} > plain {grades[1]:.2f} "
-          f"> minimal {grades[2]:.2f} > negated {grades[3]:.2f}")
+          f"> minimal {grades[2]:.2f} > negated {grades[3]:.2f}; "
+          f"meniscus grade III {g3:.2f} > grade II {g2:.2f}")
 
     bad = []
     for txt, must, mustnot in LEXICON_CASES:
