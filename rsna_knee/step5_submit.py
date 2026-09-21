@@ -27,24 +27,31 @@ import os, sys, glob, subprocess
 REPO = "https://github.com/rahpalrah/ResumeParser"
 BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 
-# An ATTACHED dataset wins, because step 5 runs with no network. Otherwise
-# clone fresh on every run - never reuse an earlier run's copy in
-# /kaggle/working, or re-running this cell after a module was fixed upstream
-# would silently keep the stale code.
+# CLONE FIRST, fall back to an attached copy only when there is no network.
+#
+# The earlier order (attached wins) had a trap: every step copies knee_*.py into
+# /kaggle/working, so those files end up inside that notebook's saved output.
+# Attaching an earlier step's output for its parquet then ALSO pinned the code
+# to whatever it looked like that day, and later fixes were invisible. Cloning
+# first means the only notebook running old code is the offline one, which
+# cannot clone anyway.
 def _attached_code():
     hits = glob.glob("/kaggle/input/*/knee_common.py")
     return os.path.dirname(hits[0]) if hits else None
 
-CODE_DIR = _attached_code()
-if CODE_DIR is None:
-    print("no attached code dataset - cloning fresh (needs internet ON)")
+CODE_DIR = None
+try:
     subprocess.run(["rm", "-rf", "/kaggle/tmp/repo"], check=False)
     subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", BRANCH, REPO,
-                    "/kaggle/tmp/repo"], check=True)
+                    "/kaggle/tmp/repo"], check=True, timeout=120)
     subprocess.run("cp /kaggle/tmp/repo/rsna_knee/*.py /kaggle/working/",
                    shell=True, check=True)
     CODE_DIR = "/kaggle/working"
-assert os.path.exists(os.path.join(CODE_DIR, "knee_common.py")), (
+    print("cloned fresh from", BRANCH)
+except Exception as e:
+    CODE_DIR = _attached_code()
+    print(f"clone unavailable ({type(e).__name__}); using attached code at {CODE_DIR}")
+assert CODE_DIR and os.path.exists(os.path.join(CODE_DIR, "knee_common.py")), (
     "Could not obtain the modules. Either turn internet ON, or run step 00 and "
     "attach its output (Add Data -> Your Work -> Notebook Output).")
 
