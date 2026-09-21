@@ -141,15 +141,29 @@ def make_grad_scaler(device: str = "cuda"):
         return torch.cuda.amp.GradScaler()
 
 
-def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.csv") -> str:
+def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.csv",
+                  verbose: bool = True) -> str:
     """Locate the competition data wherever Kaggle chose to mount it.
 
     Kaggle has used several layouts (/kaggle/input/<slug>/ and
     /kaggle/input/competitions/<slug>/), and the slug itself is easy to mistype
-    - "abnormality" vs "abnormalities" costs a debugging cycle every time.  So
-    nothing in this pipeline hard-codes the path: it searches for a file only
-    this competition has.
+    - "abnormality" vs "abnormalities" costs a debugging cycle every time. So
+    nothing in this pipeline hard-codes the path.
+
+    Candidates are SCORED rather than taken first-match, because a derived
+    dataset (someone's preprocessed JPEG export of this same competition)
+    legitimately carries copies of train.csv, train_series.csv and
+    sample_submission.csv. Only the real competition mount also carries the
+    DICOM directories, so that is what decides it.
+
+    Set KNEE_COMP_DIR to override entirely.
     """
+    override = os.environ.get("KNEE_COMP_DIR")
+    if override:
+        if not os.path.isdir(override):
+            raise FileNotFoundError(f"KNEE_COMP_DIR={override} is not a directory")
+        return override
+
     hits: List[str] = []
     for depth in ("*", "*/*"):
         hits += glob.glob(os.path.join(root, depth, marker))
@@ -158,14 +172,27 @@ def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.
             f"No {marker} found under {root}. Add the competition data to this "
             "notebook: Add Data -> Competitions -> RSNA Knee Abnormalities Detection."
         )
-    # Prefer a directory that also carries the series manifests - that rules out
-    # a stray copy of the file inside somebody else's attached dataset.
-    for h in hits:
-        d = os.path.dirname(h)
-        if os.path.exists(os.path.join(d, "train_series.csv")) or \
-           os.path.exists(os.path.join(d, "test_series.csv")):
-            return d
-    return os.path.dirname(hits[0])
+
+    def score(d: str) -> int:
+        pts = 0
+        if os.sep + "competitions" + os.sep in d + os.sep:
+            pts += 4
+        if os.path.isdir(os.path.join(d, "train_series")) or \
+           os.path.isdir(os.path.join(d, "test_series")):
+            pts += 3
+        if os.path.exists(os.path.join(d, "train_series.csv")):
+            pts += 2
+        if os.path.exists(os.path.join(d, "train.csv")):
+            pts += 1
+        return pts
+
+    cands = sorted({os.path.dirname(h) for h in hits},
+                   key=lambda d: (-score(d), d))
+    if verbose and len(cands) > 1:
+        print("several candidate data directories; scored:")
+        for d in cands:
+            print(f"   {score(d):>2}  {d}")
+    return cands[0]
 
 
 def find_series_root(comp_dir: str, split: str) -> str:
