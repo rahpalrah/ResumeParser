@@ -134,11 +134,17 @@ if prec:
 # language a gap belongs to, and a gap in a language is a terminology list
 # somebody has to write - so measure it directly and print the reports that
 # fall through.
+# Named by what the corpus actually holds: the Cyrillic block is Bulgarian
+# (медиален, no soft sign), and Greek and Croatian hide inside Latin script.
 CYR = train["rep"].str.contains(r"[а-я]", regex=True)
+GRK = train["rep"].str.contains(r"[α-ω]", regex=True) & ~CYR
 TRK = train["rep"].str.contains(r"\b(?:ve|ile|mevcut|izlen\w+|saptan\w+|eklem)\b",
-                                regex=True) & ~CYR
-OTH = ~CYR & ~TRK
-for name, sel in [("cyrillic", CYR), ("turkish", TRK), ("other", OTH)]:
+                                regex=True) & ~CYR & ~GRK
+HRV = train["rep"].str.contains(r"\b(?:uredan|urednog|bez znakova|menisk\b|krizni)\b",
+                                regex=True) & ~CYR & ~GRK & ~TRK
+OTH = ~CYR & ~GRK & ~TRK & ~HRV
+for name, sel in [("bulgarian (cyrillic)", CYR), ("greek", GRK), ("turkish", TRK),
+                  ("croatian-ish", HRV), ("other latin", OTH)]:
     n = int(sel.sum())
     print(f"\n{name}: {n:,} reports ({n/len(train):.1%})")
     if n == 0:
@@ -151,13 +157,13 @@ for name, sel in [("cyrillic", CYR), ("turkish", TRK), ("other", OTH)]:
 # Read the reports the lexicon cannot see.  Guessing medical vocabulary from
 # memory is how a pattern like \bmm\b gets written; this prints the actual
 # sentences so the terminology list is copied, not invented.
-BUCKET = "cyrillic"     # "cyrillic" | "turkish" | "other" | "all"
+BUCKET = "other"        # cyrillic | greek | turkish | croatian | other | all
 PROBE = "ACL"           # structure that must be missing; None = any report
 N_SHOW = 6
 CHARS = 500
 
-sel = {"cyrillic": CYR, "turkish": TRK, "other": OTH,
-       "all": pd.Series(True, index=train.index)}[BUCKET]
+sel = {"cyrillic": CYR, "greek": GRK, "turkish": TRK, "croatian": HRV,
+       "other": OTH, "all": pd.Series(True, index=train.index)}[BUCKET]
 if PROBE:
     sel = sel & ~train["rep"].str.contains(ANATOMY[PROBE], regex=True)
 

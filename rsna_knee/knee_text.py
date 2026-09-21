@@ -1,9 +1,14 @@
 """
 knee_text.py - multilingual rule lexicon for the radiology reports.
 
-The corpus is ~38% English. A stopword probe over the 4,407 reports puts
-Spanish/Portuguese/French around 21%, Turkish around 12%, German around 9% and
-Russian around 5%, with the rest scattered. Anatomy-coverage measurements drove
+The corpus is ~38% English. Measured on the 4,407 reports: Romance ~21%,
+Turkish ~12%, German ~9%, and a 5% Cyrillic block that is BULGARIAN, not
+Russian - Bulgarian drops the soft sign, so "медиален" where Russian writes
+"медиальный", and a Russian-shaped pattern matches none of it. Greek and
+Croatian sit inside the Latin-script remainder. Turkish writes "medyal" at
+least as often as "medial", while spelling "lateral" the same either way -
+which is why lateral meniscus coverage ran 33 points ahead of medial until
+that variant was added. Anatomy-coverage measurements drove
 every entry here: essentially every knee MRI report comments on the ACL and the
 menisci, so a pattern matching only 40% of reports is a lexicon gap, not a
 property of the data.
@@ -50,83 +55,121 @@ _CHAR_MAP = str.maketrans({
 })
 
 ANATOMY = {
-    "ACL": (r"(anterior cruciate|\bacl\b|\blca\b|lig\w* cruzado anterior|"
+    "ACL": (r"(anterior cruciate|\bacl\b|\blca\b|lig\w* cruzad\w*|ligamento[s]? cruzad\w*|"
             r"ligament croise anterieur|\bvkb\b|vorderes kreuzband|crociato anteriore|"
             r"on capraz bag|\bocb\b|anterior capraz|"
+            r"predn\w* krizn\w* ligament|krizn\w* ligament|"
+            r"προσθι\w* χιαστ\w*|χιαστ\w*|"
+            r"предна кръстна|преден кръстен|кръстн\w* (връзк|лигамент)\w*|"
             r"передн\w* крестообразн\w*|\bпкс\b)"),
     "MCL": (r"(medial collateral|\bmcl\b|\blcm\b|colateral medial|collateral medial|"
             r"ligament collateral (medial|interne)|innenband|mediales seitenband|"
-            r"collaterale mediale|ic yan bag|medial kollateral|"
+            r"collaterale mediale|ic yan bag|med[iy]al kollateral|"
+            r"medijaln\w* kolateraln\w*|εσω πλαγι\w*|"
+            r"медиал\w* колатерал\w*|вътрешн\w* странич\w*|"
             r"медиальн\w* коллатеральн\w*|внутренн\w* боков\w* связк)"),
-    "Medial Meniscus": (r"((menisc|menisk|menisq)\w*\s+(medial|intern|mediale)|"
-                        r"(medial|intern|mediale[ns]?)\s+(menisc|menisk|menisq)\w*|"
-                        r"ic menisk\w*|menisk\w* medial|"
-                        r"(медиальн\w*|внутренн\w*) мениск\w*|мениск\w* (медиальн|внутренн)\w*)"),
+    "Medial Meniscus": (r"((menisc|menisk|menisq)\w*\s+(medial|medyal|intern|mediale)|"
+                        r"(medial|medyal|intern|mediale[ns]?|medijaln\w*)\s+(menisc|menisk|menisq)\w*|"
+                        r"ic menisk\w*|menisk\w* med[iy]al|εσω μηνισκ\w*|"
+                        r"(медиал\w*|вътрешн\w*)\s+мениск\w*|мениск\w*\s+(медиал|вътрешн)\w*|"
+                        r"(медиальн\w*|внутренн\w*) мениск\w*)"),
     "Lateral Meniscus": (r"((menisc|menisk|menisq)\w*\s+(lateral|extern|laterale)|"
-                         r"(lateral|extern|laterale[ns]?)\s+(menisc|menisk|menisq)\w*|"
-                         r"dis menisk\w*|menisk\w* lateral|"
-                         r"(латеральн\w*|наружн\w*) мениск\w*|мениск\w* (латеральн|наружн)\w*)"),
-    "Medial OA": (r"((compartiment|compartment|kompartiment|kompartman)\w*\s+(medial|intern|ic)|"
-                  r"(medial|intern)\w*\s+(compartment|compartiment|kompartiment|kompartman)|"
-                  r"femorotibial (medial|intern)|medial tibiofemoral|medial joint|"
+                         r"(lateral|extern|laterale[ns]?|lateraln\w*)\s+(menisc|menisk|menisq)\w*|"
+                         r"dis menisk\w*|menisk\w* lateral|εξω μηνισκ\w*|"
+                         r"(латерал\w*|външн\w*)\s+мениск\w*|мениск\w*\s+(латерал|външн)\w*|"
+                         r"(латеральн\w*|наружн\w*) мениск\w*)"),
+    "Medial OA": (r"((compartiment|compartment|kompartiment|kompartman)\w*\s+(medial|medyal|intern|ic)|"
+                  r"(medial|medyal|intern)\w*\s+(compartment|compartiment|kompartiment|kompartman)|"
+                  r"femorotibial\w* (medial|medyal|intern)|medial tibiofemoral|medial joint|"
+                  r"medijaln\w* (kondil|femoraln|tibijaln)\w*|"
+                  r"(медиал\w*|вътрешн\w*) (отдел|компартимент|кондил|тибиал)\w*|"
+                  r"медиал\w* феморал\w*|"
                   r"(медиальн\w*|внутренн\w*) (отдел|компартмент)\w*)"),
     "Lateral OA": (r"((compartiment|compartment|kompartiment|kompartman)\w*\s+(lateral|extern|dis)|"
                    r"(lateral|extern)\w*\s+(compartment|compartiment|kompartiment|kompartman)|"
-                   r"femorotibial (lateral|extern)|lateral tibiofemoral|lateral joint|"
+                   r"femorotibial\w* (lateral|extern)|lateral tibiofemoral|lateral joint|"
+                   r"lateraln\w* (kondil|femoraln|tibijaln)\w*|"
+                   r"(латерал\w*|външн\w*) (отдел|компартимент|кондил|тибиал)\w*|"
+                   r"латерал\w* феморал\w*|"
                    r"(латеральн\w*|наружн\w*) (отдел|компартмент)\w*)"),
     "PF OA": (r"(patellofemoral|patelo?femoral|femoropatellar|femoro-?patellaire|"
-              r"retropatellar|patellarruckflache|trochlea|troklea|"
+              r"retropatellar|patellarruckflache|trochlea|troklea|trohlear|"
+              r"patelofemoraln\w*|fasete patele|επιγονατιδομηριαι\w*|"
+              r"пателофеморал\w*|ретропателар\w*|пателарн\w*|"
               r"пателлофеморальн\w*|бедренно-?надколенник\w*|ретропателлярн\w*)"),
     "Effusion": (r"(effusion|derrame|epanchement|erguss|versamento|joint fluid|"
-                 r"liquido articular|hydrops|efuzyon|eklem sivisi|eklem ici sivi|"
+                 r"liquido articular|hydrops|efuzyon|eklem ici sivi|eklemde sivi|"
+                 r"sivi artisi|sivi miktari|izljev|zglobn\w* tekucin\w*|"
+                 r"συλλογη υγρου|ενδαρθρικη συλλογη|"
+                 r"ставен излив|ставния излив|излив в|"
                  r"выпот\w*|жидкост\w* в полости|синовиальн\w* жидкост\w*)"),
     "Synovitis": (r"(synovitis|sinovitis|synovite|synovialitis|sinovite|sinovit\w*|"
-                  r"synovial (thickening|proliferation)|pannus|синовит\w*|"
-                  r"утолщени\w* синовиальн\w*)"),
+                  r"synovial (thickening|proliferation)|pannus|υμενιτιδ\w*|"
+                  r"синовит\w*|утолщени\w* синовиальн\w*)"),
     "Baker's": (r"(baker|popliteal cyst|quiste de baker|kyste poplite|bakerzyste|"
                 r"cisti di baker|poplitealzyste|baker kisti|popliteal kist|"
-                r"киста беикера|беикера|подколенн\w* киста)"),
+                r"bakerova cist\w*|κυστη (του )?baker|"
+                r"киста на беикер\w*|беикер\w*|подкол[яе]н\w* киста|"
+                r"подколенн\w* киста)"),
     "Contusion": (r"(contusion|bone bruise|bone marrow (edema|oedema)|edema (oseo|de medula)|"
                   r"knochenmarkodem|edema midollare|medullar\w* edema|marrow oedema|"
-                  r"kemik iligi odem\w*|kontuzyon|kemik odem\w*|"
+                  r"kemik iligi odem\w*|kontuzyon|kemik odem\w*|edem kosti|"
+                  r"kostan\w* kontuzij\w*|οιδημα (του )?μυελου|"
+                  r"костномозъчен едем|костно-?мозъчен оток|"
                   r"отек костного мозга|контузи\w*|трабекулярн\w* отек)"),
     "Fracture": (r"(fracture|fractura|frattura|fraktur|kirik|avulsion|avulsiyon|"
-                 r"impaction fracture|insufficiency fracture|fissur\w*|"
+                 r"impaction fracture|insufficiency fracture|fissur\w*|prijelom\w*|"
+                 r"καταγμα\w*|фрактур\w*|счупван\w*|"
                  r"перелом\w*|отрыв\w* фрагмент)"),
 }
 
 ABNORMAL = (r"(tear|tears|torn|rupt\w*|rott\w*|rotur\w*|ris[sx]\w*|lesion\w*|lesao\w*|"
             r"lacerat\w*|desgarr\w*|dechirure|discontinu\w*|sprain|esguince|entorse|"
-            r"zerrung|degenerat\w*|signal alterat\w*|grade (ii|iii|2|3)|abnormal|"
+            r"zerrung|degenerat\w*|signal alterat\w*|grade (i{1,3}|[123])\b|abnormal|"
+            r"engrosamiento|enthesopat\w*|"
             r"yirti[kglm]\w*|yirtil\w*|dejenerasyon|dejeneratif|sinyal artisi|"
-            r"разрыв\w*|надрыв\w*|поврежден\w*|дегенеративн\w*|повышени\w* сигнала)")
+            r"degeneracij\w*|ozljed\w*|lezij\w*|ruptur\w*|"
+            r"ρηξη|βλαβη|εκφυλιστικ\w*|"
+            r"скъсван\w*|разкъсван\w*|лезия|увред\w*|руптур\w*|дегенеративн\w*|"
+            r"разрыв\w*|надрыв\w*|поврежден\w*|повышени\w* сигнала)")
 
 OA_TERMS = (r"(osteoarthrit|arthros|artros|artroz|artrit|gonarthros|gonartroz|arthrosis|"
-            r"chondromalac|condromalac|kondromalaz\w*|kikirdak kayb\w*|kikirdak incel\w*|"
+            r"chondromalac|condromalac|kondromalaz\w*|hondromalacij\w*|"
+            r"condropat\w*|hondropat\w*|chondropath\w*|"
+            r"kikirdak (kayb|incel|hasar)\w*|eklem aralig\w* daral\w*|"
             r"cartilage (loss|thinning|defect)|perdida de cartilago|knorpel|"
             r"osteophyt|osteofito|osteofit\w*|joint space narrowing|pincement|"
-            r"eklem aralig\w* daral\w*|"
-            r"артроз\w*|остеофит\w*|хондромаляц\w*|сужени\w* суставн\w* щели|"
+            r"fisure hrskavice|hrskavic\w* (defekt|stanjen)\w*|"
+            r"χονδροπαθει\w*|χονδρομαλακ\w*|οστεοαρθριτ\w*|οστεοφυτ\w*|"
+            r"хондропат\w*|остеофит\w*|изтънен\w*|дегенеративн\w* промен\w*|"
+            r"артроз\w*|хондромаляц\w*|сужени\w* суставн\w* щели|"
             r"дегенеративн\w* изменени)")
 
-# Negation that PRECEDES the finding - the normal order in English and the
-# Romance and Germanic languages here.
+# Negation that PRECEDES the finding - the usual order in English, Romance,
+# Germanic, Slavic and Greek.
 NEGATION = (r"(no |not |without |sin |sans |kein |keine |nessun|negative for|"
             r"unremarkable|intact|normal|integr\w*|ausgeschlossen|descartad|"
+            r"bez |uredn\w*|"
+            r"δεν |χωρις|φυσιολογικ\w*|"
+            r"няма|без особености|\bб\.о\.|не се|"
             r"\bne \b|без |отсутств\w*)")
 
 # Negation that FOLLOWS the finding.  Turkish is verb-final - "Efuzyon
-# izlenmedi" is "effusion was not observed" - and Russian commonly places the
-# negated verb after the noun.  Checking only backwards would take every such
-# report as positive for everything it mentions, which is the worst possible
-# failure for a lexicon whose whole job is precision.
+# izlenmedi" is "effusion was not observed" - and Bulgarian, Croatian and
+# Russian all place the qualifier after the noun: "менискус с нормален мр
+# образ", "ligament urednog signala". Checking only backwards would take every
+# such report as positive for everything it mentions, which is the worst
+# possible failure for a lexicon whose whole job is precision.
 NEGATION_AFTER = (r"(izlenmedi|izlenmemis\w*|saptanmadi|saptanmamis\w*|gozlenmedi|"
                   r"goruldu degil|mevcut degil|yoktur|\byok\b|dogal|normal|intakt|"
+                  r"normaldir|korunmus|"
+                  r"uredn\w*|bez znakova|u kontinuitetu|"
+                  r"φυσιολογικ\w*|χωρις παθολογ\w*|"
+                  r"нормал\w*|правилна форма|запазен\w*|без особености|"
+                  r"не се (визуализира|проследява|установява)\w*|"
                   r"не выявлен\w*|не определя\w*|не отмеча\w*|не визуализир\w*|"
                   r"отсутств\w*|интактн\w*|сохранен\w*)")
 
-# ':' is deliberately NOT a break: "Medial meniscus: posterior horn tear"
-# is one statement, and radiologists write findings that way constantly.
 SENT_BREAK = re.compile(r"[.;\n]")
 
 
@@ -148,11 +191,28 @@ def _clause_bounds(text: str, pos: int) -> tuple:
     return lo, (m.start() if m else len(text))
 
 
+# A conjunction between a finding and a following negation means the negation
+# belongs to a separate predicate.
+CONJUNCTION = re.compile(r"(\band\b|\bve\b|\bи\b|\bte\b|\bili\b|\bveya\b|\bund\b|,)")
+
+
 def _negated(chunk: str, start: int, end: int, look: int = 45) -> bool:
-    """True if a negation cue sits just before or just after the span."""
+    """True if a negation cue sits just before, or just after, the span.
+
+    The conjunction guard matters for Bulgarian in particular: "връзка е
+    руптурирана и не се проследява до залавните си места" is a ruptured
+    ligament that CANNOT be traced - the "не се проследява" is a second
+    predicate describing the consequence, not a denial of the rupture. Without
+    the guard the most explicit positive phrasing in the language reads as a
+    negative.
+    """
     if re.search(NEGATION, chunk[max(0, start - look):start]):
         return True
-    return re.search(NEGATION_AFTER, chunk[end:end + look]) is not None
+    after = chunk[end:end + look]
+    m = re.search(NEGATION_AFTER, after)
+    if not m:
+        return False
+    return CONJUNCTION.search(after[:m.start()]) is None
 
 
 def _nearest(chunk: str, pattern: str, lo: int, hi: int):

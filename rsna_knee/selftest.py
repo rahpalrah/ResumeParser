@@ -51,21 +51,16 @@ def build_fake(tmp: str, cfg: kc.Cfg):
 
 
 LEXICON_CASES = [
-    # Cases in every language the corpus actually contains: a stopword probe
-    # over the 4,407 reports puts English at 38%, Romance ~21%, Turkish ~12%,
-    # German ~9%, Russian ~5%. Turkish is verb-final, so its negation follows
-    # the finding; Russian uses both orders.
-    # Abbreviation collisions: mm is millimetres in every language, and a
-    # measurement must never be read as a medial meniscus.
-    ('Baker cyst measuring 25 mm. No other abnormality.',
-     {"Baker's"}, {'Medial Meniscus', 'Lateral Meniscus'}),
-    ('Joint effusion, 12 mm deep.', {'Effusion'}, {'Medial Meniscus', 'Lateral Meniscus'}),
+    # The second block is VERBATIM text from the competition corpus, pulled
+    # from step 1 cell 5. Invented cases test what I imagined a report says;
+    # these test what they actually say - which is how the Bulgarian, Greek,
+    # Croatian and Turkish 'medyal' gaps were found in the first place.
     ('Complete tear of the anterior cruciate ligament. Small joint effusion.',
-     {'Effusion', 'ACL'}, {'MCL', 'Fracture'}),
+     {'ACL', 'Effusion'}, {'Fracture', 'MCL'}),
     ('ACL intact. Menisci intact. No fracture. Unremarkable study.',
-     set(), {'Fracture', 'Medial Meniscus', 'ACL'}),
+     set(), {'Fracture', 'ACL', 'Medial Meniscus'}),
     ('Normal ACL. Normal MCL. Grade 2 signal in the medial meniscus.',
-     {'Medial Meniscus'}, {'MCL', 'ACL'}),
+     {'Medial Meniscus'}, {'ACL', 'MCL'}),
     ('The medial meniscus shows no tear.',
      set(), {'Medial Meniscus'}),
     ('Medial meniscus: posterior horn tear. Lateral meniscus: intact.',
@@ -76,42 +71,58 @@ LEXICON_CASES = [
      {'Fracture', 'Contusion'}, set()),
     ('Severe patellofemoral osteoarthritis with cartilage loss. Medial compartment osteoarthritis.',
      {'PF OA', 'Medial OA'}, {'Lateral OA'}),
-    ('Rotura del menisco medial. No hay derrame articular.',
-     {'Medial Meniscus'}, {'Effusion', 'Lateral Meniscus'}),
-    ('Artrosis del compartimento lateral. Sin fractura.',
-     {'Lateral OA'}, {'Fracture', 'Medial OA'}),
-    ('Lesao do menisco medial grau III. Cisto de Baker.',
-     {"Baker's", 'Medial Meniscus'}, set()),
-    ('Le ligament croise anterieur est intact. Dechirure du menisque lateral.',
-     {'Lateral Meniscus'}, {'ACL'}),
+    ('Baker cyst measuring 25 mm. No other abnormality.',
+     {"Baker's"}, {'Lateral Meniscus', 'Medial Meniscus'}),
+    ('Joint effusion, 12 mm deep.',
+     {'Effusion'}, {'Lateral Meniscus', 'Medial Meniscus'}),
     ('Kein Erguss. Riss des Innenbandes.',
      {'MCL'}, {'Effusion'}),
     ('Bakerzyste in der Kniekehle. Knochenmarkodem medial tibial.',
      {"Baker's", 'Contusion'}, {'Fracture'}),
     ('Rottura del legamento crociato anteriore; versamento articolare.',
-     {'Effusion', 'ACL'}, {'MCL'}),
-    ('Ön çapraz bağ rüptürü mevcut. Eklem içi sıvı artışı izlenmektedir.',
-     {'ACL'}, {'MCL'}),
-    ('Medial menisküs posterior boynuzunda yırtık izlenmektedir.',
+     {'ACL', 'Effusion'}, {'MCL'}),
+    ('Lesao do menisco medial grau III. Cisto de Baker.',
+     {"Baker's", 'Medial Meniscus'}, set()),
+    ('Le ligament croise anterieur est intact. Dechirure du menisque lateral.',
+     {'Lateral Meniscus'}, {'ACL'}),
+    ('лезия на заден рог на медиален мениск, като лезията достига артикуларната повърност.',
      {'Medial Meniscus'}, {'Lateral Meniscus'}),
-    ('Efüzyon izlenmedi. Ön çapraz bağ doğal.',
-     set(), {'Effusion', 'ACL'}),
-    ('İç yan bağda yırtık saptandı. Kırık yok.',
-     {'MCL'}, {'Fracture'}),
-    ('Patellofemoral eklemde kondromalazi. Baker kisti mevcut.',
-     {'PF OA', "Baker's"}, set()),
-    ('Lateral menisküs yırtığı. Kemik iliği ödemi izlenmektedir.',
-     {'Contusion', 'Lateral Meniscus'}, {'Medial Meniscus'}),
-    ('Разрыв передней крестообразной связки. Выпот в полости сустава.',
-     {'Effusion', 'ACL'}, {'MCL'}),
-    ('Повреждение медиального мениска. Перелом не выявлен.',
-     {'Medial Meniscus'}, {'Fracture'}),
-    ('Выпот не определяется. Передняя крестообразная связка интактна.',
-     set(), {'Effusion', 'ACL'}),
-    ('Киста Бейкера. Отек костного мозга латерального мыщелка.',
-     {"Baker's", 'Contusion'}, set()),
-    ('Гонартроз медиального отдела. Синовит.',
-     {'Medial OA', 'Synovitis'}, {'Lateral OA'}),
+    ('няма мр данни за ставен излив. виждат се дифузни зони на повишен сигнален интензитет съответстващи на костномозъчен едем.',
+     {'Contusion'}, {'Effusion'}),
+    ('мр данни за ставен излив. предна кръстна връзка е руптурирана и не се проследява до залавните си места.',
+     {'ACL', 'Effusion'}, set()),
+    ('медиален и латерален менискус – с нормален мр образ.',
+     set(), {'Lateral Meniscus', 'Medial Meniscus'}),
+    ('начални дегенеративни промени по латералния мениск.',
+     {'Lateral Meniscus'}, {'Medial Meniscus'}),
+    ('двата кръстни лигамента се проследяват до залавните си места с правилна форма.',
+     set(), {'ACL'}),
+    ('medyal meniskus arka boynuzdan govdesine uzanan longitudinal yirtik.',
+     {'Medial Meniscus'}, {'Lateral Meniscus'}),
+    ('eklemde sivi artisi saptanmamistir.',
+     set(), {'Effusion'}),
+    ('diz eklemi ici sivi miktari hafif derecede artmis.',
+     {'Effusion'}, set()),
+    ('lateral meniskuste grade ii dejenerasyon, medial meniskuste grade iii dejenerasyon izlenmistir.',
+     {'Lateral Meniscus', 'Medial Meniscus'}, set()),
+    ('medyal ve lateral meniskus normal. eklem kikirdaklari ve kemikler normal.',
+     set(), {'Lateral Meniscus', 'Medial Meniscus'}),
+    ('arka capraz ve yan baglar korunmus. on capraz bagda tam kata yakin yirtik izleniyor.',
+     {'ACL'}, set()),
+    ('medijalni menisk bez znakova degeneracije ili rupture.',
+     set(), {'Medial Meniscus'}),
+    ('prednji krizni ligament urednog signala te se prati u kontinuitetu.',
+     set(), {'ACL'}),
+    ('plitke fisure hrskavice medijalne fasete patele (2. stupanj hondromalacije).',
+     {'PF OA'}, set()),
+    ('δεν αναγνωριστηκαν παθολογικα ευρηματα απο τον ελεγχο των μηνισκων, των χιαστων, των πλαγιων συνδεσμων.',
+     set(), {'ACL'}),
+    ('χωρις ενδαρθρικη συλλογη υγρου.',
+     set(), {'Effusion'}),
+    ('rotura de menisco interno. condropatia femorotibial medial. derrame.',
+     {'Effusion', 'Medial Meniscus', 'Medial OA'}, set()),
+    ('ligamentos cruzados y colaterales dentro de limites normales.',
+     set(), {'ACL'}),
 ]
 
 
@@ -179,7 +190,7 @@ def test_lexicon():
         print(f"    LEXICON FAIL {t[:60]!r} missing={miss} false={extra}")
     assert not bad, f"{len(bad)}/{len(LEXICON_CASES)} lexicon cases failed"
     print(f"[14] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass "
-          f"(en/es/pt/fr/de/it/tr/ru); no unnormalised pattern characters")
+          f"(en/es/pt/fr/de/it/tr/bg/el/hr); no unnormalised pattern characters")
 
 
 def test_train_loop(studies, series_df, y, cfg, tmp):
