@@ -429,6 +429,29 @@ def main():
             "an undecodable series came back as a volume"
         print("[9b] a series that decodes no slices returns None, not black pixels")
 
+        # Step 4 redirects kc.sprite_path to a MultiCache so several attached
+        # cache roots look like one directory. If MultiCache.resolve calls
+        # kc.sprite_path, the patch makes it call itself: RecursionError on the
+        # first sprite the DataLoader asks for, hours into a booked GPU session.
+        _orig = kc.sprite_path
+        class _MultiCache:
+            def __init__(self, roots): self.roots = roots
+            def resolve(self, study, series):
+                for r in self.roots:
+                    p = _orig(r, study, series)
+                    if os.path.exists(p):
+                        return p
+                return _orig(self.roots[0], study, series)
+        try:
+            _mc = _MultiCache([tmp])
+            kc.sprite_path = lambda cache_dir, s, se: _mc.resolve(s, se)
+            got = kc.sprite_path(None, "1.2.3.0", "1.2.3.0.0")
+            assert os.path.exists(got), got
+            print("[9c] MultiCache redirect resolves without recursing")
+        finally:
+            kc.sprite_path = _orig
+
+
         # metric + rank normalisation
         pred = np.random.rand(50, kc.N_LABELS)
         truth = (np.random.rand(50, kc.N_LABELS) > 0.7).astype(np.float32)

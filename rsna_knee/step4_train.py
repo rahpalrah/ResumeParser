@@ -86,11 +86,37 @@ print("competition data:", COMP)
 OUT = "/kaggle/working"
 # Every attached step-3 shard, plus the step-2 targets.  All located by content
 # so the notebook does not care what the attached outputs are named.
-CACHE_DIRS = [d for d in kc.find_inputs("cache") if os.path.isdir(d)]
-META_SHARDS = kc.find_inputs("series_meta_train_shard*.parquet")
-_t = kc.find_inputs("study_targets.parquet")
-assert _t, "Attach the step-2 notebook output (study_targets.parquet)"
+# Attached outputs AND /kaggle/working, so a run in the same session as step 3
+# finds the cache it just built without waiting for a Save Version.
+def _find_all(name):
+    hits = [p for p in kc.find_inputs(name) if os.path.exists(p)]
+    hits += [p for p in glob.glob(f"{OUT}/{name}") if os.path.exists(p)]
+    seen, out = set(), []
+    for h in hits:
+        if h not in seen:
+            seen.add(h); out.append(h)
+    return out
+
+CACHE_DIRS = [d for d in _find_all("cache") if os.path.isdir(d)]
+META_SHARDS = _find_all("series_meta_train_shard*.parquet")
+_t = _find_all("study_targets.parquet")
+
+def _explain(what, where):
+    print(f"\n{what} not found. Attached inputs:")
+    for d in sorted(glob.glob("/kaggle/input/*")) + sorted(glob.glob("/kaggle/input/*/*")):
+        print("   ", d)
+    raise FileNotFoundError(f"{what} is missing - {where}")
+
+if not CACHE_DIRS:
+    _explain("a cache/ directory", "attach the step-3 notebook output")
+if not META_SHARDS:
+    _explain("series_meta_train_shard*.parquet", "attach the step-3 notebook output")
+if not _t:
+    _explain("study_targets.parquet", "attach the step-2 notebook output")
 TARGETS = _t[0]
+print(f"cache roots      : {CACHE_DIRS}")
+print(f"shard manifests  : {[os.path.basename(p) for p in META_SHARDS]}")
+print(f"targets          : {TARGETS}")
 
 FOLD = globals().get("FOLD", 0)
 EFFICIENCY = globals().get("EFFICIENCY", False)   # True -> efficiency-track config
@@ -106,28 +132,45 @@ DEV = "cuda"
 
 # --- CELL 2 -----------------------------------------------------------------
 _shards = sorted(META_SHARDS)
-assert _shards, "Attach the step-3 shard outputs"
-print(f"{len(_shards)} shard manifests")
 meta = pd.concat([pd.read_parquet(p) for p in _shards], ignore_index=True)
 meta = meta[meta["ok"] == 1].drop_duplicates("SeriesInstanceUID").reset_index(drop=True)
 print(f"cached series: {len(meta):,} over {meta.StudyInstanceUID.nunique():,} studies")
 
 # The cache is spread over several attached datasets; resolve each sprite once.
+# Capture the real function BEFORE patching. resolve() looks kc.sprite_path up
+# at call time, so once the patch below rebinds that name to a lambda calling
+# resolve(), resolve calling kc.sprite_path is calling itself - RecursionError
+# on the first sprite the DataLoader asks for.
+_ORIG_SPRITE_PATH = kc.sprite_path
+
+
 class MultiCache:
     """Presents several read-only cache roots as one directory to the dataset."""
     def __init__(self, roots): self.roots = roots
     def resolve(self, study, series):
         for r in self.roots:
-            p = kc.sprite_path(r, study, series)
+            p = _ORIG_SPRITE_PATH(r, study, series)
             if os.path.exists(p):
                 return p
-        return kc.sprite_path(self.roots[0], study, series)
+        return _ORIG_SPRITE_PATH(self.roots[0], study, series)
 
 _mc = MultiCache(CACHE_DIRS if CACHE_DIRS else [f"{OUT}/cache"])
 kc.sprite_path = lambda cache_dir, s, se: _mc.resolve(s, se)
 import knee_data as kd
 kd.sprite_path = kc.sprite_path
-print("cache roots:", _mc.roots)
+
+# Check the cache actually RESOLVES before training on it. A cache directory
+# that exists but whose sprites do not match this manifest reads as a silent
+# wall of zeros, and the first sign would be epoch 0 sitting at 0.50 forty
+# minutes from now.
+_probe = meta.sample(min(300, len(meta)), random_state=0)
+_hit = sum(os.path.exists(kc.sprite_path(None, r.StudyInstanceUID, r.SeriesInstanceUID))
+           for r in _probe.itertuples())
+_rate = _hit / len(_probe)
+print(f"sprite resolution: {_hit}/{len(_probe)} of a random sample ({_rate:.1%})")
+assert _rate > 0.95, (
+    f"only {_rate:.1%} of sprites resolve against {_mc.roots}. The cache and the "
+    f"manifest disagree - attach the step-3 output that produced this manifest.")
 
 # The DICOM headers of ~48% of studies carry no Laterality tag - the
 # diagnostic confirmed it is absent from the allowlisted set, not empty. The
