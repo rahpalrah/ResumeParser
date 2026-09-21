@@ -76,7 +76,7 @@ the "expected output" below, stop and fix it before spending GPU hours.
 | `knee_common.py` | constants, DICOM reader, sprite cache, slot assignment, metric |
 | `knee_model.py` | CARE-Net, asymmetric soft-target loss, weight EMA |
 | `knee_data.py` | study-level dataset, augmentation, multi-label folds |
-| `knee_text.py` | multilingual report lexicon (clause-scoped, negation-aware) |
+| `knee_text.py` | report lexicon: 8 languages, clause-scoped, negation on both sides |
 | `selftest.py` | 15 checks on synthetic data — run by step 00 |
 | `step00_bootstrap.py` | clones the repo on Kaggle, self-tests, downloads wheels |
 | `step0_setup.py` | environment + data sanity check |
@@ -244,10 +244,24 @@ Run `step1_reports.py`. It builds a multilingual regex lexicon (anatomy terms ×
 finding terms, in a proximity window, with negation cues) and scores it against
 the gold labels.
 
-The lexicon is clause-scoped and negation-aware, which is not cosmetic: reports
-read "The ACL is intact. Tear of the lateral meniscus." — a plain keyword window
-would call that an ACL tear. The 14 cases in `selftest.py` pin that behaviour
-across English, Spanish, French, German, Italian and Portuguese phrasings.
+The corpus is only ~38% English. Measured by stopword probe: Romance ~21%,
+Turkish ~12%, German ~9%, Russian ~5%. The lexicon covers all of them, and
+three properties of it are load-bearing rather than cosmetic:
+
+- **Clause scoping.** "The ACL is intact. Tear of the lateral meniscus." — a
+  plain keyword window calls that an ACL tear.
+- **Negation on both sides.** Turkish is verb-final: "Efüzyon izlenmedi" is
+  "effusion was not observed". Checking only backwards takes every such report
+  as positive for everything it mentions.
+- **Nearest-structure attribution.** "Tear of the medial meniscus, intact
+  lateral meniscus" is one positive, not two — a comma is no clause break, so
+  both menisci see the same "tear" and only the nearer may claim it.
+
+Two normalisation traps are handled in `norm_text`, and both fail silently
+with zero matches rather than an error: Turkish dotless ı has no NFKD
+decomposition, and NFKD *does* decompose Cyrillic (й→и, ё→е), so "Бейкера"
+normalises to "беикера". The 26 cases in `selftest.py` pin all of this, and a
+guard there asserts no pattern holds a character `norm_text` would alter.
 
 **Expected output:**
 

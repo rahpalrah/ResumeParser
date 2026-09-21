@@ -51,32 +51,62 @@ def build_fake(tmp: str, cfg: kc.Cfg):
 
 
 LEXICON_CASES = [
-    ("Complete tear of the anterior cruciate ligament. Small joint effusion.",
-     {"ACL", "Effusion"}, {"MCL", "Fracture"}),
-    ("Rotura del menisco medial. No hay derrame articular.",
-     {"Medial Meniscus"}, {"Effusion", "Lateral Meniscus"}),
-    ("Le ligament croise anterieur est intact. Dechirure du menisque lateral.",
-     {"Lateral Meniscus"}, {"ACL"}),
-    ("Kein Erguss. Riss des Innenbandes.", {"MCL"}, {"Effusion"}),
-    ("Bakerzyste in der Kniekehle. Knochenmarkodem medial tibial.",
-     {"Baker's", "Contusion"}, {"Fracture"}),
-    ("Severe patellofemoral osteoarthritis with cartilage loss. Medial compartment osteoarthritis.",
-     {"PF OA", "Medial OA"}, {"Lateral OA"}),
-    ("ACL intact. Menisci intact. No fracture. Unremarkable study.",
-     set(), {"ACL", "Fracture", "Medial Meniscus"}),
-    ("Artrosis del compartimento lateral. Sin fractura.",
-     {"Lateral OA"}, {"Fracture", "Medial OA"}),
-    ("Rottura del legamento crociato anteriore; versamento articolare.",
-     {"ACL", "Effusion"}, {"MCL"}),
-    ("Lesao do menisco medial grau III. Cisto de Baker.",
-     {"Medial Meniscus", "Baker's"}, set()),
-    ("Normal ACL. Normal MCL. Grade 2 signal in the medial meniscus.",
-     {"Medial Meniscus"}, {"ACL", "MCL"}),
-    ("Medial meniscus: posterior horn tear. Lateral meniscus: intact.",
-     {"Medial Meniscus"}, {"Lateral Meniscus"}),
-    ("The medial meniscus shows no tear.", set(), {"Medial Meniscus"}),
-    ("Impaction fracture of the lateral femoral condyle with bone marrow edema.",
-     {"Fracture", "Contusion"}, set()),
+    # Cases in every language the corpus actually contains: a stopword probe
+    # over the 4,407 reports puts English at 38%, Romance ~21%, Turkish ~12%,
+    # German ~9%, Russian ~5%. Turkish is verb-final, so its negation follows
+    # the finding; Russian uses both orders.
+    ('Complete tear of the anterior cruciate ligament. Small joint effusion.',
+     {'Effusion', 'ACL'}, {'MCL', 'Fracture'}),
+    ('ACL intact. Menisci intact. No fracture. Unremarkable study.',
+     set(), {'Fracture', 'Medial Meniscus', 'ACL'}),
+    ('Normal ACL. Normal MCL. Grade 2 signal in the medial meniscus.',
+     {'Medial Meniscus'}, {'MCL', 'ACL'}),
+    ('The medial meniscus shows no tear.',
+     set(), {'Medial Meniscus'}),
+    ('Medial meniscus: posterior horn tear. Lateral meniscus: intact.',
+     {'Medial Meniscus'}, {'Lateral Meniscus'}),
+    ('Tear of the medial meniscus, intact lateral meniscus.',
+     {'Medial Meniscus'}, {'Lateral Meniscus'}),
+    ('Impaction fracture of the lateral femoral condyle with bone marrow edema.',
+     {'Fracture', 'Contusion'}, set()),
+    ('Severe patellofemoral osteoarthritis with cartilage loss. Medial compartment osteoarthritis.',
+     {'PF OA', 'Medial OA'}, {'Lateral OA'}),
+    ('Rotura del menisco medial. No hay derrame articular.',
+     {'Medial Meniscus'}, {'Effusion', 'Lateral Meniscus'}),
+    ('Artrosis del compartimento lateral. Sin fractura.',
+     {'Lateral OA'}, {'Fracture', 'Medial OA'}),
+    ('Lesao do menisco medial grau III. Cisto de Baker.',
+     {"Baker's", 'Medial Meniscus'}, set()),
+    ('Le ligament croise anterieur est intact. Dechirure du menisque lateral.',
+     {'Lateral Meniscus'}, {'ACL'}),
+    ('Kein Erguss. Riss des Innenbandes.',
+     {'MCL'}, {'Effusion'}),
+    ('Bakerzyste in der Kniekehle. Knochenmarkodem medial tibial.',
+     {"Baker's", 'Contusion'}, {'Fracture'}),
+    ('Rottura del legamento crociato anteriore; versamento articolare.',
+     {'Effusion', 'ACL'}, {'MCL'}),
+    ('Ön çapraz bağ rüptürü mevcut. Eklem içi sıvı artışı izlenmektedir.',
+     {'ACL'}, {'MCL'}),
+    ('Medial menisküs posterior boynuzunda yırtık izlenmektedir.',
+     {'Medial Meniscus'}, {'Lateral Meniscus'}),
+    ('Efüzyon izlenmedi. Ön çapraz bağ doğal.',
+     set(), {'Effusion', 'ACL'}),
+    ('İç yan bağda yırtık saptandı. Kırık yok.',
+     {'MCL'}, {'Fracture'}),
+    ('Patellofemoral eklemde kondromalazi. Baker kisti mevcut.',
+     {'PF OA', "Baker's"}, set()),
+    ('Lateral menisküs yırtığı. Kemik iliği ödemi izlenmektedir.',
+     {'Contusion', 'Lateral Meniscus'}, {'Medial Meniscus'}),
+    ('Разрыв передней крестообразной связки. Выпот в полости сустава.',
+     {'Effusion', 'ACL'}, {'MCL'}),
+    ('Повреждение медиального мениска. Перелом не выявлен.',
+     {'Medial Meniscus'}, {'Fracture'}),
+    ('Выпот не определяется. Передняя крестообразная связка интактна.',
+     set(), {'Effusion', 'ACL'}),
+    ('Киста Бейкера. Отек костного мозга латерального мыщелка.',
+     {"Baker's", 'Contusion'}, set()),
+    ('Гонартроз медиального отдела. Синовит.',
+     {'Medial OA', 'Synovitis'}, {'Lateral OA'}),
 ]
 
 
@@ -122,7 +152,18 @@ def test_path_discovery():
 def test_lexicon():
     """The report rules decide the teacher's floor - a leaked negation here
     poisons every soft label downstream, so they get real cases."""
-    from knee_text import norm_text, rule_features
+    from knee_text import (norm_text, rule_features, ANATOMY, ABNORMAL,
+                           OA_TERMS, NEGATION, NEGATION_AFTER)
+    # NFKD decomposes Cyrillic and Turkish letters - й becomes и, ё becomes е -
+    # so a pattern written in the natural spelling matches nothing at all, with
+    # no error to notice. Every pattern must be in post-normalisation form.
+    pats = dict(ANATOMY)
+    pats.update({"ABNORMAL": ABNORMAL, "OA_TERMS": OA_TERMS,
+                 "NEGATION": NEGATION, "NEGATION_AFTER": NEGATION_AFTER})
+    unnormalised = [(n, c) for n, p in pats.items() for c in set(p)
+                    if c.isalpha() and norm_text(c) != c]
+    assert not unnormalised, f"patterns hold characters norm_text alters: {unnormalised}"
+
     bad = []
     for txt, must, mustnot in LEXICON_CASES:
         f = rule_features(norm_text(txt))
@@ -132,7 +173,8 @@ def test_lexicon():
     for t, miss, extra in bad:
         print(f"    LEXICON FAIL {t[:60]!r} missing={miss} false={extra}")
     assert not bad, f"{len(bad)}/{len(LEXICON_CASES)} lexicon cases failed"
-    print(f"[14] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass")
+    print(f"[14] report lexicon: {len(LEXICON_CASES)}/{len(LEXICON_CASES)} cases pass "
+          f"(en/es/pt/fr/de/it/tr/ru); no unnormalised pattern characters")
 
 
 def test_train_loop(studies, series_df, y, cfg, tmp):
