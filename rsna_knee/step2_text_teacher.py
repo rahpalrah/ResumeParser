@@ -1,14 +1,27 @@
 # =============================================================================
 # STEP 2 - the report teacher.                     Kaggle notebook, GPU T4 x2.
-# Internet: ON (downloads xlm-roberta-base).  Runtime: ~1.5 h for 5 folds.
+# Internet: ON (downloads xlm-roberta-base).  Runtime: ~1 h.
 #
-# Why this step exists: the image model needs a target for the ~90% of training
-# studies that have a report but no labels.  A multilingual text model fitted on
-# the labelled subset reaches far higher AUC on the reports than any image model
-# ever will on the pixels, so its predictions are a much better teacher signal
-# than nothing.  The test set has no reports - this model never runs at
-# inference, it only manufactures training targets.  That is the distillation
-# half of CARE-Net.
+# WHY THIS IS NOT ORDINARY SUPERVISED FINE-TUNING
+#
+# train.csv carries 4,407 reports and gold labels on only ~58 studies. Fitting
+# a 278M-parameter encoder to 58 examples across 12 targets memorises them; it
+# does not learn to read a report. So the teacher is trained by SELF-TRAINING
+# instead:
+#
+#   1. The step-1 rule lexicon labels all 4,407 reports. Rules are precise and
+#      low-recall - they fire on the phrasings somebody thought of.
+#   2. XLM-R is fitted to those 4,407 RULE labels. With thousands of noisy
+#      examples it generalises past the lexicon: it learns the paraphrases,
+#      the languages and the hedged phrasings the regexes miss, because those
+#      co-occur with the ones that do fire.
+#   3. The gold studies are held out of every fit and used ONLY to measure. At
+#      n=58 they are a sanity check, not a selection signal - do not tune
+#      against them.
+#
+# Output: study_targets.parquet, carrying for every study a soft target per
+# label plus a per-cell is_gold flag, so step 4 can weight a real annotation
+# above a teacher guess.
 # =============================================================================
 
 # --- CELL 1 -----------------------------------------------------------------
@@ -36,8 +49,7 @@ if CODE_DIR is None:
                    shell=True, check=True)
     CODE_DIR = _locate_code()
 assert CODE_DIR, ("Could not obtain the modules. Either turn internet ON, or run "
-                  "step 00 and attach its output (Add Data -> Your Work -> "
-                  "Notebook Output).")
+                  "step 00 and attach its output.")
 sys.path.insert(0, CODE_DIR)
 print("code from:", CODE_DIR)
 
@@ -46,42 +58,67 @@ import numpy as np, pandas as pd, torch, torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel, get_cosine_schedule_with_warmup
 import knee_common as kc
+from knee_text import norm_text, rule_features
 
-COMP = kc.find_comp_dir()          # autodetected: never hard-code the slug
+COMP = kc.find_comp_dir()
 print("competition data:", COMP)
 OUT = "/kaggle/working"
-MODEL_NAME = "xlm-roberta-base"     # multilingual by construction; the reports
-                                    # are in several languages
+
+MODEL_NAME = "xlm-roberta-base"   # the reports are in several languages
 MAX_LEN = 512
-FOLDS = 5
 EPOCHS = 3
 BS = 8
 LR = 2e-5
+VAL_FRAC = 0.1
 DEV = "cuda"
 kc.seed_everything(42)
 
 train = pd.read_csv(f"{COMP}/train.csv")
-_r = glob.glob("/kaggle/input/*/rule_features.parquet") + [f"{OUT}/rule_features.parquet"]
-_r = [p for p in _r if os.path.exists(p)]
+_r = [p for p in glob.glob("/kaggle/input/*/rule_features.parquet")
+      + [f"{OUT}/rule_features.parquet"] if os.path.exists(p)]
 assert _r, "Attach the step-1 notebook output (rule_features.parquet)"
 rules = pd.read_parquet(_r[0])
 train = train.merge(rules, on="StudyInstanceUID", how="left")
 rule_cols = [f"rule_{c}" for c in kc.LABELS]
 train[rule_cols] = train[rule_cols].fillna(0.0)
 
-is_lab = train[kc.LABELS].notna().all(axis=1).values
-lab_df = train[is_lab].reset_index(drop=True)
-print(f"labelled {len(lab_df):,} | unlabelled {int((~is_lab).sum()):,}")
-
 # --- CELL 2 -----------------------------------------------------------------
+# Gold cells are sparse: a study may be annotated for some findings and not
+# others.  Track them per cell, never per study.
+GOLD = train[kc.LABELS].notna().values.astype(np.float32)     # (N, 12)
+gold_rows = GOLD.max(axis=1) > 0
+print(f"studies with at least one gold label : {int(gold_rows.sum()):,}")
+print(f"studies with all twelve              : "
+      f"{int((GOLD.sum(axis=1) == kc.N_LABELS).sum()):,}")
+print("\ngold annotations per label:")
+for i, c in enumerate(kc.LABELS):
+    n = int(GOLD[:, i].sum())
+    pos = float(np.nansum(train[c].values[GOLD[:, i] > 0]))
+    print(f"  {c:<18s} {n:>5} annotated, {pos:>4.0f} positive")
+
+# The teacher's training targets are the RULES, on the studies with no gold.
+Y_RULE = train[rule_cols].values.astype(np.float32)
+fit_df = train[~gold_rows].reset_index(drop=True)
+gold_df = train[gold_rows].reset_index(drop=True)
+print(f"\nfitting on {len(fit_df):,} rule-labelled studies; "
+      f"{len(gold_df):,} gold studies held out entirely")
+
+rng = np.random.default_rng(0)
+perm = rng.permutation(len(fit_df))
+n_val = int(len(fit_df) * VAL_FRAC)
+va_idx, tr_idx = perm[:n_val], perm[n_val:]
+print(f"early-stopping split: {len(tr_idx):,} train / {len(va_idx):,} val")
+
+# --- CELL 3 -----------------------------------------------------------------
 class ReportDS(Dataset):
-    def __init__(self, df, tok, with_target=True):
+    def __init__(self, df, tok, targets=None):
         self.txt = df["Report"].fillna("").astype(str).tolist()
         self.rule = df[rule_cols].values.astype(np.float32)
-        self.y = df[kc.LABELS].values.astype(np.float32) if with_target else None
+        self.y = targets
         self.tok = tok
 
-    def __len__(self): return len(self.txt)
+    def __len__(self):
+        return len(self.txt)
 
     def __getitem__(self, i):
         enc = self.tok(self.txt[i], truncation=True, max_length=MAX_LEN,
@@ -94,11 +131,11 @@ class ReportDS(Dataset):
 
 
 class ReportTeacher(nn.Module):
-    """Encoder + mean-pool, concatenated with the rule hits from step 1.
+    """Encoder mean-pool concatenated with the rule hits.
 
     Feeding the rules in explicitly is not redundant with the encoder: it gives
-    the head a calibrated, language-agnostic prior for the rare labels where 512
-    tokens of training text are not enough to learn the phrasing from scratch."""
+    the head a calibrated, language-agnostic prior, and it means the teacher can
+    never do worse than the rules on a phrasing the rules already handle."""
 
     def __init__(self, name=MODEL_NAME):
         super().__init__()
@@ -114,92 +151,97 @@ class ReportTeacher(nn.Module):
         return self.head(torch.cat([self.drop(pooled), rule], dim=-1))
 
 
-def run_fold(fold, folds, tok):
-    tr = lab_df[folds != fold].reset_index(drop=True)
-    va = lab_df[folds == fold].reset_index(drop=True)
-    dl_tr = DataLoader(ReportDS(tr, tok), batch_size=BS, shuffle=True,
-                       num_workers=2, drop_last=True, pin_memory=True)
-    dl_va = DataLoader(ReportDS(va, tok), batch_size=BS * 2, num_workers=2)
-
-    model = ReportTeacher().to(DEV)
-    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-    steps = len(dl_tr) * EPOCHS
-    sch = get_cosine_schedule_with_warmup(opt, int(0.06 * steps), steps)
-    scaler = kc.make_grad_scaler()
-    lossf = nn.BCEWithLogitsLoss()
-
-    best, best_state = -1.0, None
-    for ep in range(EPOCHS):
-        model.train()
-        for b in dl_tr:
-            b = {k: v.to(DEV, non_blocking=True) for k, v in b.items()}
-            with kc.amp_autocast():
-                loss = lossf(model(b["input_ids"], b["attention_mask"], b["rule"]),
-                             b["target"])
-            scaler.scale(loss).backward()
-            scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); sch.step()
-
-        model.eval(); P = []
-        with torch.no_grad(), kc.amp_autocast():
-            for b in dl_va:
-                b = {k: v.to(DEV) for k, v in b.items()}
-                P.append(torch.sigmoid(model(b["input_ids"], b["attention_mask"],
-                                             b["rule"])).float().cpu().numpy())
-        P = np.concatenate(P)
-        m, per = kc.macro_auc(va[kc.LABELS].values.astype(np.float32), P)
-        print(f"  fold {fold} ep {ep}: macro AUC {m:.5f}")
-        if m > best:
-            best, best_state = m, {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            best_pred = P
-    torch.save(best_state, f"{OUT}/teacher_f{fold}.pt")
-    del model; gc.collect(); torch.cuda.empty_cache()
-    return best, best_pred, va["StudyInstanceUID"].values
-
-# --- CELL 3 -----------------------------------------------------------------
 tok = AutoTokenizer.from_pretrained(MODEL_NAME)
-from knee_data import make_folds
-folds = make_folds(lab_df, FOLDS, seed=42)
+y_fit = fit_df[rule_cols].values.astype(np.float32)
+dl_tr = DataLoader(ReportDS(fit_df.iloc[tr_idx], tok, y_fit[tr_idx]),
+                   batch_size=BS, shuffle=True, num_workers=2,
+                   drop_last=True, pin_memory=True)
+dl_va = DataLoader(ReportDS(fit_df.iloc[va_idx], tok, y_fit[va_idx]),
+                   batch_size=BS * 2, num_workers=2)
+dl_gold = DataLoader(ReportDS(gold_df, tok), batch_size=BS * 2, num_workers=2)
 
-oof = np.zeros((len(lab_df), kc.N_LABELS), np.float32)
-uid2row = {u: i for i, u in enumerate(lab_df["StudyInstanceUID"])}
-scores = []
-for f in range(FOLDS):
-    s, p, uids = run_fold(f, folds, tok)
-    scores.append(s)
-    for u, row in zip(uids, p):
-        oof[uid2row[u]] = row
+GOLD_Y = gold_df[kc.LABELS].fillna(0.0).values.astype(np.float32)
+GOLD_M = gold_df[kc.LABELS].notna().values.astype(np.float32)
 
-m, per = kc.macro_auc(lab_df[kc.LABELS].values.astype(np.float32), oof)
-print("\nTEACHER out-of-fold (step 1 rules were %.4f):" % kc.macro_auc(
-    lab_df[kc.LABELS].values.astype(np.float32), lab_df[rule_cols].values)[0])
-kc.print_auc_table(m, per)
 
-# --- CELL 4 -----------------------------------------------------------------
-# Soft-label every study that has no gold label, averaging the five folds.
-unl = train[~is_lab].reset_index(drop=True)
-dl = DataLoader(ReportDS(unl, tok, with_target=False), batch_size=BS * 2, num_workers=2)
-acc = np.zeros((len(unl), kc.N_LABELS), np.float32)
-for f in range(FOLDS):
-    model = ReportTeacher().to(DEV)
-    model.load_state_dict(torch.load(f"{OUT}/teacher_f{f}.pt", map_location="cpu")); model.eval()
+@torch.no_grad()
+def predict(model, loader):
+    model.eval()
     P = []
-    with torch.no_grad(), kc.amp_autocast():
-        for b in dl:
-            b = {k: v.to(DEV) for k, v in b.items()}
+    with kc.amp_autocast():
+        for b in loader:
+            b = {k: v.to(DEV) for k, v in b.items() if k != "target"}
             P.append(torch.sigmoid(model(b["input_ids"], b["attention_mask"],
                                          b["rule"])).float().cpu().numpy())
-    acc += np.concatenate(P) / FOLDS
-    del model; gc.collect(); torch.cuda.empty_cache()
+    return np.concatenate(P)
 
-soft = pd.DataFrame(acc, columns=kc.LABELS)
-soft.insert(0, "StudyInstanceUID", unl["StudyInstanceUID"].values)
-soft["is_gold"] = 0
-gold = lab_df[["StudyInstanceUID"] + kc.LABELS].copy()
-gold["is_gold"] = 1
-targets = pd.concat([gold, soft], ignore_index=True)
+
+model = ReportTeacher().to(DEV)
+opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
+steps = len(dl_tr) * EPOCHS
+sch = get_cosine_schedule_with_warmup(opt, int(0.06 * steps), steps)
+scaler = kc.make_grad_scaler()
+lossf = nn.BCEWithLogitsLoss()
+
+rule_gold_auc, _ = kc.macro_auc(GOLD_Y, gold_df[rule_cols].values.astype(np.float32),
+                                mask=GOLD_M)
+print(f"rules alone, measured on the gold studies: {rule_gold_auc:.5f}\n")
+
+best = -1.0
+for ep in range(EPOCHS):
+    model.train(); t0 = time.time(); run = 0.0
+    for i, b in enumerate(dl_tr):
+        b = {k: v.to(DEV, non_blocking=True) for k, v in b.items()}
+        with kc.amp_autocast():
+            loss = lossf(model(b["input_ids"], b["attention_mask"], b["rule"]),
+                         b["target"])
+        scaler.scale(loss).backward()
+        scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); sch.step()
+        run += loss.item()
+        if (i + 1) % 100 == 0:
+            print(f"    ep{ep} {i+1}/{len(dl_tr)} loss {run/(i+1):.4f} "
+                  f"{(time.time()-t0)/60:.1f} min", flush=True)
+
+    P_va = predict(model, dl_va)
+    m_rule, _ = kc.macro_auc(y_fit[va_idx], P_va)
+    P_gold = predict(model, dl_gold)
+    m_gold, per_gold = kc.macro_auc(GOLD_Y, P_gold, mask=GOLD_M)
+    print(f"  epoch {ep}: held-out rule AUC {m_rule:.5f} | GOLD AUC {m_gold:.5f} "
+          f"| {(time.time()-t0)/60:.1f} min")
+    if m_rule > best:                      # selection on the large noisy set,
+        best = m_rule                      # never on 58 gold studies
+        torch.save(model.state_dict(), f"{OUT}/teacher.pt")
+        print(f"    saved (held-out rule AUC {best:.5f})")
+
+# --- CELL 4 -----------------------------------------------------------------
+model.load_state_dict(torch.load(f"{OUT}/teacher.pt", map_location="cpu"))
+model = model.to(DEV)
+
+P_gold = predict(model, dl_gold)
+m_gold, per_gold = kc.macro_auc(GOLD_Y, P_gold, mask=GOLD_M)
+print(f"TEACHER on the {len(gold_df)} gold studies "
+      f"(rules alone were {rule_gold_auc:.4f}):")
+kc.print_auc_table(m_gold, per_gold)
+# A continuation line must never begin with % or ! - IPython reads those as
+# cell magics and the cell dies with a SyntaxError.
+print(f"\n  n={len(gold_df)}: a sanity check, not a leaderboard estimate.")
+
+dl_all = DataLoader(ReportDS(train, tok), batch_size=BS * 2, num_workers=2)
+SOFT = predict(model, dl_all)
+
+# Gold wins wherever it exists; the teacher fills every other cell.
+GOLD_VALS = train[kc.LABELS].fillna(0.0).values.astype(np.float32)
+TARGET = np.where(GOLD > 0, GOLD_VALS, SOFT)
+
+targets = pd.DataFrame(TARGET, columns=kc.LABELS)
+targets.insert(0, "StudyInstanceUID", train["StudyInstanceUID"].values)
+for i, c in enumerate(kc.LABELS):
+    targets[f"is_gold_{c}"] = GOLD[:, i]
 targets.to_parquet(f"{OUT}/study_targets.parquet", index=False)
 
-print("\nstudy_targets.parquet", targets.shape)
-print("mean soft prevalence vs gold prevalence")
-for c in kc.LABELS:
-    print(f"  {c:<18s} soft {soft[c].mean():.3f}   gold {gold[c].mean():.3f}")
+print(f"\nstudy_targets.parquet {targets.shape}")
+print(f"  gold cells    : {int(GOLD.sum()):,} of {GOLD.size:,}")
+print("\nteacher mean probability vs rule firing rate, per label")
+for i, c in enumerate(kc.LABELS):
+    print(f"  {c:<18s} teacher {SOFT[:, i].mean():.3f}   "
+          f"rules {Y_RULE[:, i].mean():.3f}")

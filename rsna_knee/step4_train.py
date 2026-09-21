@@ -2,12 +2,20 @@
 # STEP 4 - train CARE-Net.                         Kaggle notebook, GPU T4 x2.
 # Internet: ON (timm weights).  Runtime: ~7 h for one fold. Run once per fold.
 #
-# Two stages, which is the whole point of the pipeline:
-#   A) distillation pass over EVERY study, against the report teacher's soft
-#      targets.  This is where the model learns what a torn ACL looks like,
-#      using ~10x more studies than the gold labels alone provide.
-#   B) fine-tune on the gold-labelled studies only, at a lower LR.
-# Validation is always gold-only, on the held-out fold.
+# The gold labels cover ~58 studies. That is too few to fine-tune on and far
+# too few to validate on - 12 studies per fold would put 2 positives in the MCL
+# column, and a macro AUC computed on that is noise.
+#
+# So the split is:
+#   TRAIN  on the report teacher's targets, over every study with no gold label.
+#   SELECT on a held-out fold of those same teacher targets (n~430). Noisy in
+#          absolute terms, but large enough to rank checkpoints.
+#   REPORT on the gold studies, held out of every fit, scored per cell with a
+#          mask. This is the honest estimate, and it is a sanity check at that
+#          sample size - never tune against it.
+#
+# Per-cell weights let a real annotation outweigh a teacher guess wherever gold
+# exists.
 # =============================================================================
 
 # --- CELL 1 -----------------------------------------------------------------
@@ -85,44 +93,43 @@ class MultiCache:
         return kc.sprite_path(self.roots[0], study, series)
 
 _mc = MultiCache(CACHE_DIRS if CACHE_DIRS else [f"{OUT}/cache"])
-_orig_sprite_path = kc.sprite_path
 kc.sprite_path = lambda cache_dir, s, se: _mc.resolve(s, se)
 import knee_data as kd
 kd.sprite_path = kc.sprite_path
 print("cache roots:", _mc.roots)
 
 targets = pd.read_parquet(TARGETS)
-targets = targets[targets["StudyInstanceUID"].isin(set(meta["StudyInstanceUID"]))].reset_index(drop=True)
-gold = targets[targets["is_gold"] == 1].reset_index(drop=True)
-soft = targets[targets["is_gold"] == 0].reset_index(drop=True)
-print(f"gold {len(gold):,} | soft {len(soft):,}")
+targets = targets[targets["StudyInstanceUID"].isin(set(meta["StudyInstanceUID"]))]
+targets = targets.reset_index(drop=True)
 
-folds = make_folds(gold, CFG.folds, seed=CFG.seed)
-tr_gold = gold[folds != FOLD].reset_index(drop=True)
-va_gold = gold[folds == FOLD].reset_index(drop=True)
-print(f"fold {FOLD}: train {len(tr_gold):,} / valid {len(va_gold):,}")
+GOLD_COLS = [f"is_gold_{c}" for c in kc.LABELS]
+assert set(GOLD_COLS) <= set(targets.columns), (
+    "study_targets.parquet has no per-cell gold flags - re-run step 2.")
+GOLD_M = targets[GOLD_COLS].values.astype(np.float32)
+is_gold_row = GOLD_M.max(axis=1) > 0
 
-def make_loader(df, train, weight=1.0, bs=None):
+gold_df = targets[is_gold_row].reset_index(drop=True)
+pseudo_df = targets[~is_gold_row].reset_index(drop=True)
+gold_mask = GOLD_M[is_gold_row]
+print(f"gold holdout {len(gold_df):,} studies ({int(gold_mask.sum()):,} annotated cells) "
+      f"| teacher-labelled {len(pseudo_df):,}")
+
+folds = make_folds(pseudo_df, CFG.folds, seed=CFG.seed)
+tr_df = pseudo_df[folds != FOLD].reset_index(drop=True)
+va_df = pseudo_df[folds == FOLD].reset_index(drop=True)
+print(f"fold {FOLD}: train {len(tr_df):,} / select-on {len(va_df):,} / gold {len(gold_df):,}")
+
+def loader(df, train, weights=None, bs=None):
     ds = KneeStudyDataset(df, meta, CFG, train=train,
                           targets=df[kc.LABELS].values.astype(np.float32),
-                          weights=np.full(len(df), weight, np.float32))
+                          weights=weights)
     return DataLoader(ds, batch_size=bs or CFG.batch_size, shuffle=train,
                       num_workers=CFG.num_workers, pin_memory=True,
-                      drop_last=train, collate_fn=collate,
-                      persistent_workers=CFG.num_workers > 0)
+                      drop_last=train, collate_fn=collate)
 
-# stage A sees the soft studies plus the in-fold gold studies
-stage_a_df = pd.concat([soft, tr_gold], ignore_index=True)
-stage_a_w = np.concatenate([np.full(len(soft), CFG.pseudo_weight, np.float32),
-                            np.ones(len(tr_gold), np.float32)])
-dl_a = DataLoader(
-    KneeStudyDataset(stage_a_df, meta, CFG, train=True,
-                     targets=stage_a_df[kc.LABELS].values.astype(np.float32),
-                     weights=stage_a_w),
-    batch_size=CFG.batch_size, shuffle=True, num_workers=CFG.num_workers,
-    pin_memory=True, drop_last=True, collate_fn=collate)
-dl_b = make_loader(tr_gold, True)
-dl_va = make_loader(va_gold, False, bs=CFG.batch_size * 2)
+dl_tr = loader(tr_df, True, np.full((len(tr_df), kc.N_LABELS), 1.0, np.float32))
+dl_va = loader(va_df, False, bs=CFG.batch_size * 2)
+dl_gold = loader(gold_df, False, bs=CFG.batch_size * 2)
 
 # --- CELL 3 -----------------------------------------------------------------
 from knee_model import MEDIAL_IDX, LATERAL_IDX
@@ -202,8 +209,11 @@ def train_stage(name, loader, epochs, lr_scale=1.0):
                       f"loss {run/(i+1):.4f} {(time.time()-t0)/60:.1f} min", flush=True)
         y, p = evaluate(ema.ema, dl_va)
         m, per = kc.macro_auc(y, p)
+        yg, pg = evaluate(ema.ema, dl_gold)
+        m_gold, _ = kc.macro_auc(yg, pg, mask=gold_mask)
         print(f"  [{name}] epoch {ep}: loss {run/max(len(loader),1):.4f} "
-              f"| val macro AUC {m:.5f} | {(time.time()-t0)/60:.1f} min")
+              f"| select AUC {m:.5f} | gold AUC {m_gold:.5f} "
+              f"| {(time.time()-t0)/60:.1f} min")
         best = max(best, m)
         if m > GLOBAL_BEST:
             GLOBAL_BEST = m
@@ -213,22 +223,29 @@ def train_stage(name, loader, epochs, lr_scale=1.0):
             print(f"    saved (best so far {GLOBAL_BEST:.5f})")
     return best
 
-print("\n=== STAGE A: report distillation over all studies ===")
-best_a = train_stage("A", dl_a, CFG.epochs_pseudo)
-print("\n=== STAGE B: gold fine-tune ===")
-best_b = train_stage("B", dl_b, CFG.epochs_gold, lr_scale=0.3)
+print("\n=== training on the report teacher's targets ===")
+best = train_stage("distil", dl_tr, CFG.epochs_pseudo + CFG.epochs_gold)
 
 # --- CELL 4 -----------------------------------------------------------------
 ck = torch.load(f"{OUT}/carenet_f{FOLD}.pt", map_location="cpu", weights_only=False)
 model.load_state_dict(ck["model"])
+
 y, p = evaluate(model, dl_va, tta=True)
 m, per = kc.macro_auc(y, p)
-print(f"\nFOLD {FOLD} final (with mirror TTA): {m:.5f}")
-kc.print_auc_table(m, per)
+print(f"\nFOLD {FOLD} against the teacher targets, mirror TTA: {m:.5f}")
+print("  (how well it reproduces the teacher - the selection signal)")
+
+yg, pg = evaluate(model, dl_gold, tta=True)
+m_gold, per_gold = kc.macro_auc(yg, pg, mask=gold_mask)
+print(f"\nFOLD {FOLD} against the {len(gold_df)} GOLD studies, mirror TTA:")
+kc.print_auc_table(m_gold, per_gold)
+print(f"  n={len(gold_df)}: wide error bars. A label showing nan had too few "
+      f"annotated rows or only one class.")
 
 np.save(f"{OUT}/oof_pred_f{FOLD}.npy", p)
-va_gold[["StudyInstanceUID"]].to_csv(f"{OUT}/oof_uid_f{FOLD}.csv", index=False)
-json.dump({"fold": FOLD, "macro_auc": m, "per_label": per,
-           "stage_a": best_a, "stage_b": best_b},
+va_df[["StudyInstanceUID"]].to_csv(f"{OUT}/oof_uid_f{FOLD}.csv", index=False)
+np.save(f"{OUT}/gold_pred_f{FOLD}.npy", pg)
+json.dump({"fold": FOLD, "select_auc": m, "gold_auc": m_gold,
+           "per_label_gold": per_gold, "best_select": best},
           open(f"{OUT}/fold{FOLD}_score.json", "w"), indent=2)
-print("saved carenet_f%d.pt + oof" % FOLD)
+print(f"saved carenet_f{FOLD}.pt + oof")

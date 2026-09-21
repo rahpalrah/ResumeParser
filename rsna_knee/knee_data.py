@@ -74,7 +74,12 @@ class KneeStudyDataset(Dataset):
         self.studies = studies.reset_index(drop=True)
         self.uids: List[str] = self.studies["StudyInstanceUID"].tolist()
         self.targets = targets
-        self.weights = weights if weights is not None else np.ones(len(self.uids), np.float32)
+        # (N,) weights a study uniformly, (N,12) weights each label cell - the
+        # gold labels are sparse, so a study can carry a real annotation for one
+        # finding and only a teacher guess for the next.
+        w = np.ones((len(self.uids), 1), np.float32) if weights is None \
+            else np.asarray(weights, np.float32)
+        self.weights = w[:, None] if w.ndim == 1 else w
 
         s = series[series["slot"] >= 0]
         self.by_study: Dict[str, List[dict]] = {
@@ -145,7 +150,7 @@ class KneeStudyDataset(Dataset):
             "fat": torch.from_numpy(fat),
             "series_mask": torch.from_numpy(mask),
             "lat": torch.tensor(lat, dtype=torch.long),
-            "weight": torch.tensor(float(self.weights[i]), dtype=torch.float32),
+            "weight": torch.from_numpy(np.ascontiguousarray(self.weights[i], np.float32)),
             "uid": uid,
         }
         if self.targets is not None:
@@ -166,7 +171,9 @@ def collate(batch: List[dict]) -> Dict[str, object]:
 def make_folds(df: pd.DataFrame, n_folds: int, seed: int = 42) -> np.ndarray:
     """Multi-label stratified folds, falling back to plain KFold if the
     iterative-stratification package is unavailable (it is pip-only)."""
-    y = df[LABELS].values
+    # Targets may be teacher probabilities rather than 0/1; stratification needs
+    # a hard label, so binarise for the split only.
+    y = (df[LABELS].values > 0.5).astype(int)
     try:
         from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
         splitter = MultilabelStratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)

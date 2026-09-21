@@ -13,11 +13,14 @@ notebook and hands every later step the modules and the offline pip wheels.
 
 Three facts about *this* competition drive the design:
 
-1. **Reports exist for every training study, labels for only a few.** So the
-   first model trained is not an image model at all — it is a multilingual text
-   model that reads the reports and manufactures soft targets for the ~90% of
-   studies that have no gold labels. The test set has no reports, so this model
-   never runs at inference; it exists purely to distil into the image model.
+1. **Reports exist for all 4,407 training studies; gold labels exist for ~58.**
+   Measured, not assumed — step 0 prints it. That is 1.3%, which rules out
+   supervised fine-tuning and rules out cross-validation as a selection signal.
+   So the first model trained is not an image model at all: the step-1 rule
+   lexicon labels every report, a multilingual text model is fitted to *those*
+   labels (self-training on thousands of noisy examples, not 58 clean ones),
+   and its predictions become the image model's targets. The test set has no
+   reports, so this model never runs at inference.
 2. **`test_series.csv` gives plane / fluid-sensitivity / fat-suppression at test
    time.** So the study-level head is *told* what each series is instead of
    guessing. Each series token carries learned embeddings for its role.
@@ -44,10 +47,18 @@ DICOM series ──▶ 2.5D slices ──▶ CNN backbone ──┬─▶ slice 
 ## 1. Honest expectations
 
 The public top is **0.956 macro AUC**. Do not expect this pipeline to land there
-on the first submission. What a single fold of the config below realistically
-produces is roughly **0.87–0.91 local CV**, and the gap to the top of the board
-is closed by scale (more slices, larger backbones, more folds, 3–5 different
-backbones ensembled) rather than by a different idea. Kaggle's 9-hour GPU cap
+on the first submission.
+
+And be clear about what any local number means here: with ~58 gold studies, a
+"local CV" figure has error bars of roughly ±0.05 and several labels will be
+undefined outright (MCL has ~9 positives in total). **The leaderboard is your
+validation set.** The gold studies catch gross breakage — a model at 0.5, a
+flipped label — and nothing finer. Every number this pipeline prints against
+the teacher's targets measures agreement with the teacher, not with truth.
+
+The gap to the top of the board is closed by scale (more slices, larger
+backbones, more folds, 3–5 different backbones ensembled) rather than by a
+different idea. Kaggle's 9-hour GPU cap
 is the binding constraint, which is exactly why step 3 caches the pixels once
 and every later run is cheap.
 
@@ -102,9 +113,9 @@ Eight notebooks, all on Kaggle. Nothing runs anywhere else.
 | 00 | `step00_bootstrap.py` | CPU | ON | 1× | `ALL SELF-TESTS PASSED`, 5 decoders `OK` |
 | 0 | `step0_setup.py` | GPU | ON | 1× | `volume (16, 256, 256) uint8` — not `None` |
 | 1 | `step1_reports.py` | CPU | ON | 1× | rule macro AUC ≥ 0.75, no label P < 0.6 |
-| 2 | `step2_text_teacher.py` | GPU | ON | 1× | teacher OOF macro AUC ≥ 0.95 |
-| 3 | `step3_preprocess.py` | CPU | ON | 8× (`SHARD`) + 1× (`SPLIT="test"`) | `failures: 0`, unknown laterality < 30% |
-| 4 | `step4_train.py` | GPU | ON | 5× (`FOLD`) | stage A ep0 > 0.75; stage B beats stage A |
+| 2 | `step2_text_teacher.py` | GPU | ON | 1× | teacher gold AUC **beats** rules-alone |
+| 3 | `step3_preprocess.py` | CPU | ON | 2× (`SHARD`) + 1× (`SPLIT="test"`) | `failures: 0`, unknown laterality < 30% |
+| 4 | `step4_train.py` | GPU | ON | 5× (`FOLD`) | select AUC > 0.75; gold AUC rising with it |
 | 5 | `step5_submit.py` | GPU | **OFF** | per submission | `wrote submission.csv (1300, 13)` |
 
 Only two variables are ever edited by hand: `SHARD` in step 3 and `FOLD` in
@@ -265,39 +276,55 @@ need to be *precise*; they become input features for step 2, and a noisy feature
 is worse than a sparse one. Re-run `python selftest.py` after any lexicon
 edit.
 
-## STEP 2 — the report teacher (GPU, ~1.5 h, internet ON)
+## STEP 2 — the report teacher (GPU, ~1 h, internet ON)
 
-Run `step2_text_teacher.py`. Five folds of XLM-R + the rule features, then
-soft-label every unlabelled study.
+Run `step2_text_teacher.py`. It fits XLM-R to the **rule labels** over the
+~4,349 studies with no gold annotation, selects on a held-out 10% of those, and
+measures against the gold studies, which are held out of every fit.
+
+This is self-training, not supervised learning. The rules are precise and
+low-recall; a model fitted to thousands of their outputs generalises to the
+paraphrases and languages the regexes miss, because those co-occur in the same
+reports with the phrasings that do fire.
 
 **Expected output:**
 
 ```
-labelled 4,xxx | unlabelled 3x,xxx
-  fold 0 ep 0: macro AUC 0.93xxx
-  fold 0 ep 2: macro AUC 0.96xxx
+studies with at least one gold label : 58
+studies with all twelve              : 58
+
+gold annotations per label:
+  ACL                   58 annotated,   24 positive
+  MCL                   58 annotated,    9 positive
   ...
-TEACHER out-of-fold (step 1 rules were 0.8xxx):
-  macro AUC = 0.96 – 0.98
-study_targets.parquet (Nstudies, 14)
-mean soft prevalence vs gold prevalence
-  ACL                soft 0.141   gold 0.139
-  ...
+fitting on 4,349 rule-labelled studies; 58 gold studies held out entirely
+early-stopping split: 3,915 train / 434 val
+
+rules alone, measured on the gold studies: 0.7xxxx
+
+  epoch 0: held-out rule AUC 0.93xxx | GOLD AUC 0.7xxxx
+  epoch 2: held-out rule AUC 0.96xxx | GOLD AUC 0.8xxxx
+
+TEACHER on the 58 gold studies (rules alone were 0.7xxx):
+  macro AUC = 0.80 – 0.88
 ```
 
-**Gate:** teacher OOF ≥ 0.95, and the soft prevalences within ~±0.03 of the gold
-prevalences. A teacher below ~0.93 will inject more noise than signal — raise
-`EPOCHS` to 4 or `MAX_LEN` to 640 before continuing. If soft prevalence is far
-*below* gold for a label, the teacher is under-calling it; that label will stay
-weak in the image model too.
+**Gates:**
+- Held-out rule AUC ≥ 0.93. Below that the model is not even reproducing the
+  rules, which means a tokenisation or truncation problem, not a data problem.
+- **Teacher gold AUC > rules-alone gold AUC.** This is the one that matters. If
+  self-training does not beat the lexicon it was trained from, it is adding
+  noise — lower `EPOCHS` to 2, or go improve `knee_text.py` and re-run step 1.
+- Do not tune on the gold number. At n=58 the difference between 0.82 and 0.85
+  is one study changing rank.
 
-Save the notebook version and publish its output as a dataset named
-**`knee-text-teacher`**.
+Publish the output; step 4 finds `study_targets.parquet` by glob.
 
 ## STEP 3 — build the sprite cache (CPU 12 h notebook, internet ON)
 
 Run `step3_preprocess.py` **once per shard**, changing `SHARD` from 0 to
-`NUM_SHARDS-1`. Each run decodes its slice of the series list and writes one
+`NUM_SHARDS-1`. Step 0 measured ~1 h of total work, so `NUM_SHARDS = 2` is
+plenty — about 25 minutes per run. Each run decodes its slice of the series list and writes one
 JPEG per series. Save a version after each run; each output becomes a dataset.
 
 Only series that win one of the four slots are decoded, so roughly a third of
@@ -306,13 +333,13 @@ the corpus is skipped before any DICOM is touched.
 **Expected output per shard:**
 
 ```
-train: 27,xxx series in slots (of 4x,xxx total)
-shard 0/8: 3,4xx series
-     200/3400  ok=   200    2.1 min elapsed  ETA  33.4 min
+train: ~17,600 series in slots (of 24,371 total)
+shard 0/2: ~8,800 series
+     200/8800  ok=   200    0.3 min elapsed  ETA  13.0 min
     ...
 failures: 0
-cache size this shard: 0.26 GiB
-laterality distribution: {1: 1800, 0: 1500, 2: 100}
+cache size this shard: ~2.0 GiB
+laterality distribution: {1: 4400, 0: 4100, 2: 300}
 round-trip: (16, 256, 256) uint8 min 0 max 255
 ```
 
@@ -331,43 +358,48 @@ studies — useful for debugging step 5 quickly.
 Attach: competition data, `knee-code`, `knee-text-teacher`, and every step-3
 shard output. Run `step4_train.py` once per fold (`FOLD = 0..4`).
 
-Stage A distils from the report teacher over every study; stage B fine-tunes on
-gold labels only at 0.3× LR. Validation is always gold-only.
+It trains on the report teacher's targets over every study with no gold label,
+selects checkpoints on a held-out fold of those same targets, and reports
+against the gold studies with a per-cell mask. The gold studies never enter a
+fit.
 
 **Expected output:**
 
 ```
-cached series: 27,xxx over 3x,xxx studies
+cached series: ~17,600 over 4,407 studies
 cache roots: ['/kaggle/input/knee-cache-s0/cache', ...]
-gold 4,xxx | soft 3x,xxx
-fold 0: train 3,4xx / valid 8xx
+gold holdout 58 studies (696 annotated cells) | teacher-labelled 4,349
+fold 0: train 3,479 / select-on 870 / gold 58
 CARE-Net convnext_tiny.fb_in22k_ft_in1k: 30.7 M parameters
 
-=== STAGE A: report distillation over all studies ===
-    A ep0 200/4800 loss 0.3412 6.2 min
-  [A] epoch 0: loss 0.2611 | val macro AUC 0.81xxx | 121.4 min
-  [A] epoch 1: loss 0.2233 | val macro AUC 0.84xxx | 120.9 min
-
-=== STAGE B: gold fine-tune ===
-  [B] epoch 0: loss 0.2104 | val macro AUC 0.86xxx | 14.1 min
+=== training on the report teacher's targets ===
+    distil ep0 200/2175 loss 0.3412 6.2 min
+  [distil] epoch 0: loss 0.2611 | select AUC 0.81xxx | gold AUC 0.72xxx | 31.4 min
+  [distil] epoch 1: loss 0.2233 | select AUC 0.84xxx | gold AUC 0.75xxx | 31.0 min
   ...
-  [B] epoch 5: loss 0.1588 | val macro AUC 0.88xxx | 14.0 min
+  [distil] epoch 7: loss 0.1588 | select AUC 0.88xxx | gold AUC 0.79xxx | 31.2 min
 
-FOLD 0 final (with mirror TTA): 0.89xxx
-    ACL                0.94xx
-    Medial Meniscus    0.90xx
-    Medial OA          0.85xx
-    Fracture           0.78xx
+FOLD 0 against the teacher targets, mirror TTA: 0.88xxx
+  (how well it reproduces the teacher - the selection signal)
+
+FOLD 0 against the 58 GOLD studies, mirror TTA:
+  macro AUC = 0.79xxx
+    ACL                0.85xx
+    MCL                nan          <- too few positives at n=58
+    Medial OA          0.74xx
 ```
 
 **Gates:**
-- Stage A epoch 0 must already beat ~0.75. If it sits at ~0.50 the cache is not
+- Epoch 0 select-AUC above ~0.75. If it sits near 0.50 the cache is not
   resolving — check `cache roots` and that `cached series` is non-zero.
-- Stage B must improve on stage A's best. If it does not, the teacher is too
-  noisy: lower `pseudo_weight` to 0.3.
+- Gold AUC should rise with select-AUC. If select-AUC climbs while gold AUC
+  falls, the model is learning the teacher's mistakes rather than the anatomy;
+  stop and improve the teacher.
 - Per-label: `Medial OA` and `Lateral OA` should not be near-identical. If they
   are, the compartment branch is not contributing — confirm laterality is mostly
   known and that coronal series are present.
+- Expect `nan` on some gold labels. With 58 studies a rare finding can have too
+  few positives to define an AUC; that is honest reporting, not a bug.
 
 Publish the fold checkpoints as a dataset **`knee-carenet`**.
 
@@ -414,7 +446,9 @@ almost always means the column order or the study order drifted.
    only ranking matters. Spend the time on the rare labels instead: Fracture and
    Synovitis have the most headroom and the fewest positives.
 5. **Better teacher.** A larger multilingual encoder, or translating the reports
-   once and using a stronger English model, raises the ceiling of stage A.
+   once and using a stronger English model, raises the ceiling of everything
+   downstream. With 58 gold labels the teacher IS the supervision — it is worth
+   more effort than the image model.
 
 ## 5. Licensing note
 

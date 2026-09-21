@@ -53,7 +53,8 @@ print("competition data:", COMP)
 OUT = "/kaggle/working"
 
 SHARD = 0            # <-- CHANGE THIS each run: 0,1,2,...,NUM_SHARDS-1
-NUM_SHARDS = 8
+NUM_SHARDS = 2       # step 0 measured ~1 h total on 4 procs, so 2 runs of ~25
+                     # min each. Raise it only if step 0 projects over ~11 h.
 SPLIT = "train"      # "train" or "test"
 N_PROC = 4           # Kaggle CPU notebooks expose 4 vCPU
 

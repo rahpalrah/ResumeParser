@@ -421,20 +421,27 @@ def study_series_map(series_df: pd.DataFrame) -> Dict[str, Dict[int, List[str]]]
 # Metrics
 # --------------------------------------------------------------------------- #
 
-def macro_auc(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, Dict[str, float]]:
+def macro_auc(y_true: np.ndarray, y_pred: np.ndarray,
+              mask: Optional[np.ndarray] = None) -> Tuple[float, Dict[str, float]]:
     """Competition metric: mean ROC AUC over the twelve targets.
 
-    Columns that are constant in `y_true` are undefined and skipped, which
-    happens on small validation folds for rare findings like Fracture.
+    `mask` (same shape as y_true, 1 = this cell is a real annotation) exists
+    because the gold labels are sparse: a study may be annotated for some
+    findings and not others, and scoring an un-annotated cell against a
+    placeholder would be worse than skipping it.
+
+    Columns that are constant, or that have fewer than two usable rows, are
+    undefined and reported as nan rather than silently averaged in.
     """
     from sklearn.metrics import roc_auc_score
     per: Dict[str, float] = {}
     for i, name in enumerate(LABELS):
-        yt = y_true[:, i]
-        if yt.min() == yt.max():
+        sel = np.ones(len(y_true), dtype=bool) if mask is None else (mask[:, i] > 0)
+        yt, yp = y_true[sel, i], y_pred[sel, i]
+        if len(yt) < 2 or yt.min() == yt.max():
             per[name] = float("nan")
             continue
-        per[name] = float(roc_auc_score(yt, y_pred[:, i]))
+        per[name] = float(roc_auc_score(yt, yp))
     vals = [v for v in per.values() if not math.isnan(v)]
     return (float(np.mean(vals)) if vals else float("nan")), per
 

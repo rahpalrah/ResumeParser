@@ -249,7 +249,10 @@ class SoftAsymmetricLoss(nn.Module):
         loss_neg = (1 - t) * torch.log(p_neg.clamp(min=1e-8)) * torch.pow(p, self.gn)
         loss = -(loss_pos + loss_neg)
         if weight is not None:
-            loss = loss * weight.view(-1, 1)
+            # (B,) weights one study uniformly; (B,L) weights each cell, which
+            # is what sparse gold labels need - a study can carry a real
+            # annotation for Effusion and only a teacher guess for Fracture.
+            loss = loss * (weight if weight.dim() == 2 else weight.view(-1, 1))
         return loss.mean()
 
 
