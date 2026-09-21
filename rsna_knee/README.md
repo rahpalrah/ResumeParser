@@ -223,7 +223,7 @@ projected step-3 wall time on 4 procs : 2.5 h total
 
 **Gate:** every probe decodes (`5/5 successful`) and the displayed slices look
 like knee MRI. `DECODE FAILED` on all five means a decoder is missing — install
-the wheels from cell 2 and re-run. If the projected cache is over ~15 GiB, drop
+the wheels from cell 1 and re-run. If the projected cache is over ~15 GiB, drop
 `img_size` to 224 or `n_slices` to 12 in `Cfg`; if per-shard time exceeds ~11 h,
 raise `NUM_SHARDS` in step 3.
 

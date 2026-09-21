@@ -52,7 +52,7 @@ if missing:
     print("\n  -> install the missing decoders (internet ON):")
     print("     !pip install -q pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg python-gdcm")
 
-# --- CELL 3 -----------------------------------------------------------------
+# --- CELL 2 -----------------------------------------------------------------
 train = pd.read_csv(f"{COMP}/train.csv")
 train_series = pd.read_csv(f"{COMP}/train_series.csv")
 test = pd.read_csv(f"{COMP}/test.csv")
@@ -80,7 +80,7 @@ print(train_series.groupby(["Anatomical_Plane", "Fluid_Sensitive",
 print("\nseries per study:",
       train_series.groupby("StudyInstanceUID").size().describe().to_string())
 
-# --- CELL 4 -----------------------------------------------------------------
+# --- CELL 3 -----------------------------------------------------------------
 # Time the real read path on a random sample of series.  One series is far too
 # noisy to plan from: slice counts run 20-300 and transfer syntaxes decode at
 # very different speeds.  This number decides how you shard step 3:
@@ -110,7 +110,7 @@ for _, row in sample.iterrows():
 
 assert times, (
     "Every probe series failed to decode. Install the DICOM decoders "
-    "(cell 2 prints the pip line) and re-run this cell.")
+    "(cell 1 prints the pip line) and re-run this cell.")
 
 t_med = float(np.median(times))
 kb_med = float(np.median(sizes))
