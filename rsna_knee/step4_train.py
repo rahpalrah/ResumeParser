@@ -37,8 +37,13 @@ BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 # first means the only notebook running old code is the offline one, which
 # cannot clone anyway.
 def _attached_code():
-    hits = glob.glob("/kaggle/input/*/knee_common.py")
-    return os.path.dirname(hits[0]) if hits else None
+    # Several depths: Kaggle mounts a dataset at /kaggle/input/<slug>/ or at
+    # /kaggle/input/datasets/<owner>/<slug>/, and a notebook output deeper
+    # still. A single-level glob finds nothing in the nested layout.
+    hits = []
+    for d in range(1, 5):
+        hits += glob.glob("/kaggle/input/" + "*/" * d + "knee_common.py")
+    return os.path.dirname(sorted(hits)[0]) if hits else None
 
 CODE_DIR = None
 try:
@@ -75,9 +80,9 @@ print("competition data:", COMP)
 OUT = "/kaggle/working"
 # Every attached step-3 shard, plus the step-2 targets.  All located by content
 # so the notebook does not care what the attached outputs are named.
-CACHE_DIRS = sorted(glob.glob("/kaggle/input/*/cache"))
-META_GLOB = "/kaggle/input/*/series_meta_train_shard*.parquet"
-_t = glob.glob("/kaggle/input/*/study_targets.parquet")
+CACHE_DIRS = [d for d in kc.find_inputs("cache") if os.path.isdir(d)]
+META_SHARDS = kc.find_inputs("series_meta_train_shard*.parquet")
+_t = kc.find_inputs("study_targets.parquet")
 assert _t, "Attach the step-2 notebook output (study_targets.parquet)"
 TARGETS = _t[0]
 
@@ -89,7 +94,7 @@ kc.seed_everything(CFG.seed + FOLD)
 DEV = "cuda"
 
 # --- CELL 2 -----------------------------------------------------------------
-_shards = sorted(glob.glob(META_GLOB))
+_shards = sorted(META_SHARDS)
 assert _shards, "Attach the step-3 shard outputs"
 print(f"{len(_shards)} shard manifests")
 meta = pd.concat([pd.read_parquet(p) for p in _shards], ignore_index=True)

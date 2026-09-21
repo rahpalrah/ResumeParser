@@ -43,8 +43,13 @@ BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 # first means the only notebook running old code is the offline one, which
 # cannot clone anyway.
 def _attached_code():
-    hits = glob.glob("/kaggle/input/*/knee_common.py")
-    return os.path.dirname(hits[0]) if hits else None
+    # Several depths: Kaggle mounts a dataset at /kaggle/input/<slug>/ or at
+    # /kaggle/input/datasets/<owner>/<slug>/, and a notebook output deeper
+    # still. A single-level glob finds nothing in the nested layout.
+    hits = []
+    for d in range(1, 5):
+        hits += glob.glob("/kaggle/input/" + "*/" * d + "knee_common.py")
+    return os.path.dirname(sorted(hits)[0]) if hits else None
 
 CODE_DIR = None
 try:
@@ -90,8 +95,7 @@ DEV = "cuda"
 kc.seed_everything(42)
 
 train = pd.read_csv(f"{COMP}/train.csv")
-_r = [p for p in glob.glob("/kaggle/input/*/rule_features.parquet")
-      + glob.glob("/kaggle/input/*/*/rule_features.parquet")
+_r = [p for p in kc.find_inputs("rule_features.parquet")
       + [f"{OUT}/rule_features.parquet"] if os.path.exists(p)]
 if not _r:
     print("rule_features.parquet not found. Attached inputs are:")

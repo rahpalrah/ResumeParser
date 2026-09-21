@@ -30,8 +30,13 @@ BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 # first means the only notebook running old code is the offline one, which
 # cannot clone anyway.
 def _attached_code():
-    hits = glob.glob("/kaggle/input/*/knee_common.py")
-    return os.path.dirname(hits[0]) if hits else None
+    # Several depths: Kaggle mounts a dataset at /kaggle/input/<slug>/ or at
+    # /kaggle/input/datasets/<owner>/<slug>/, and a notebook output deeper
+    # still. A single-level glob finds nothing in the nested layout.
+    hits = []
+    for d in range(1, 5):
+        hits += glob.glob("/kaggle/input/" + "*/" * d + "knee_common.py")
+    return os.path.dirname(sorted(hits)[0]) if hits else None
 
 CODE_DIR = None
 try:

@@ -141,6 +141,26 @@ def make_grad_scaler(device: str = "cuda"):
         return torch.cuda.amp.GradScaler()
 
 
+def find_inputs(name: str, root: str = "/kaggle/input", max_depth: int = 4) -> List[str]:
+    """Every attached file matching `name`, searched several levels deep.
+
+    Kaggle does not mount everything at one depth. A competition lands at
+    /kaggle/input/competitions/<slug>/, while a dataset can land at
+    /kaggle/input/<slug>/ or /kaggle/input/datasets/<owner>/<slug>/, and a
+    notebook output deeper still. A two-level glob silently finds nothing in
+    the nested layout, so search a range of depths instead of assuming one.
+    """
+    hits: List[str] = []
+    for d in range(1, max_depth + 1):
+        hits += glob.glob(os.path.join(root, *(["*"] * d), name))
+    seen, out = set(), []
+    for h in sorted(hits):
+        if h not in seen:
+            seen.add(h)
+            out.append(h)
+    return out
+
+
 def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.csv",
                   verbose: bool = True) -> str:
     """Locate the competition data wherever Kaggle chose to mount it.
@@ -164,9 +184,7 @@ def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.
             raise FileNotFoundError(f"KNEE_COMP_DIR={override} is not a directory")
         return override
 
-    hits: List[str] = []
-    for depth in ("*", "*/*"):
-        hits += glob.glob(os.path.join(root, depth, marker))
+    hits = find_inputs(marker, root)
     if not hits:
         raise FileNotFoundError(
             f"No {marker} found under {root}. Add the competition data to this "
