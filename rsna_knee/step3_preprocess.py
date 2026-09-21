@@ -19,12 +19,23 @@ from multiprocessing import Pool
 
 # Settings read from globals() first, so the one-cell runner can set them
 # without editing this file - `SHARD = 1` before the exec is enough.
+#
+# A value left in the notebook namespace by an EARLIER run is found the same
+# way and outlives the cell that set it, which is how a NUM_SHARDS=2 from a
+# previous attempt survived a probe that asked for 1. Every override taken
+# from globals is printed below, so it cannot apply silently.
 SPLIT = globals().get("SPLIT", "train")   # "test" is never needed: step 5
                                           # decodes DICOM directly
 SHARD = globals().get("SHARD", 0)         # only if the probe says to shard
 NUM_SHARDS = globals().get("NUM_SHARDS", None)   # None = decide from throughput
 TIME_BUDGET_H = globals().get("TIME_BUDGET_H", 9.0)  # inside the 12 h CPU limit
 N_PROBE = 48          # series decoded to measure throughput (kept, not wasted)
+_inherited = [k for k in ("SPLIT", "SHARD", "NUM_SHARDS", "TIME_BUDGET_H")
+              if k in globals() and globals()[k] is not None]
+if _inherited:
+    print("settings taken from the notebook namespace: "
+          + ", ".join(f"{k}={globals()[k]}" for k in _inherited))
+    print("  (del them, or set NUM_SHARDS = None, to let this run decide)")
 REPO = "https://github.com/rahpalrah/ResumeParser"
 BRANCH = "claude/knee-mri-abnormalities-kaggle-6jzvyk"
 
@@ -221,19 +232,32 @@ gib = float(meta["kb"].sum()) / 2**20
 # decoder that quietly gave up, and nothing else here would notice.
 blank = float((meta.loc[meta["ok"] == 1, "std"] < 1.0).mean()) if (meta["ok"] == 1).any() else 1.0
 print(f"\n{'='*66}\nshard {SHARD} finished in {elapsed/60:.1f} min -> {meta_path}")
+# Blocking gates are about the CACHE being sound. A bad sprite poisons every
+# epoch that reads it and nothing downstream would notice.
 gates = [
     ("decode failures < 2%", fail_rate < 0.02, f"{fail_rate:.2%} ({int(fail_rate*n)} of {n:,})"),
-    ("unknown laterality < 30%", unknown_lat < 0.30,
-     f"{unknown_lat:.1%} of studies ({lat_series:.1%} of series)"),
     ("cache size < 15 GiB", gib < 15.0, f"{gib:.2f} GiB"),
     ("near-black sprites < 2%", blank < 0.02, f"{blank:.2%}"),
 ]
+# Laterality is about how much the compartment branch can do with the cache,
+# not whether the cache is correct. Blocking on it would be refusing to save
+# 17 minutes of perfectly good sprites over a modelling question.
+advisory = [
+    ("unknown laterality < 30%", unknown_lat < 0.30,
+     f"{unknown_lat:.1%} of studies ({lat_series:.1%} of series)"),
+]
 for name, passed, detail in gates:
     print(f"  {'PASS' if passed else 'FAIL'}  {name:<26s} {detail}")
+for name, passed, detail in advisory:
+    print(f"  {'ok  ' if passed else 'WARN'}  {name:<26s} {detail}")
+if not all(p for _, p, _ in advisory):
+    print("    -> the compartment branch falls back to its unknown-side token on"
+          "\n       those studies. Run diag_laterality.py to see what the headers"
+          "\n       actually carry before deciding whether it is recoverable.")
 if fail_rate >= 0.02:
     print("\nfirst failures:")
     print(meta[meta["ok"] == 0].head(3).to_string())
-assert all(p for _, p, _ in gates), "a gate failed - read the rows above before saving"
+assert all(p for _, p, _ in gates), "a blocking gate failed - read the rows above"
 
 # ---- 8. round trip, and look at it -------------------------------------------
 row = meta[meta["ok"] == 1].sample(1, random_state=0).iloc[0]
