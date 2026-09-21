@@ -301,36 +301,49 @@ low-recall; a model fitted to thousands of their outputs generalises to the
 paraphrases and languages the regexes miss, because those co-occur in the same
 reports with the phrasings that do fire.
 
-**Expected output:**
+**Measured output** (this is what the run actually produced, not an estimate):
 
 ```
 studies with at least one gold label : 58
-studies with all twelve              : 58
-
-gold annotations per label:
-  ACL                   58 annotated,   24 positive
-  MCL                   58 annotated,    9 positive
-  ...
 fitting on 4,349 rule-labelled studies; 58 gold studies held out entirely
 early-stopping split: 3,915 train / 434 val
 
-rules alone, measured on the gold studies: 0.7xxxx
+rules alone, measured on the gold studies: 0.76659
 
-  epoch 0: held-out rule AUC 0.93xxx | GOLD AUC 0.7xxxx
-  epoch 2: held-out rule AUC 0.96xxx | GOLD AUC 0.8xxxx
+  epoch 0: held-out rule AUC 0.83334 | GOLD AUC 0.68090 | 2.6 min
+  epoch 1: held-out rule AUC 0.90620 | GOLD AUC 0.77370 | 2.6 min
+  epoch 2: held-out rule AUC 0.93551 | GOLD AUC 0.80676 | 2.6 min
+  epoch 3: held-out rule AUC 0.95043 | GOLD AUC 0.82388 | 2.6 min
+  epoch 4: held-out rule AUC 0.95582 | GOLD AUC 0.82106 | 2.6 min
+  epoch 5: held-out rule AUC 0.95653 | GOLD AUC 0.82104 | 2.6 min
 
-TEACHER on the 58 gold studies (rules alone were 0.7xxx):
-  macro AUC = 0.80 – 0.88
+gold-study macro AUC of each candidate target:
+  rules alone    0.76659
+  teacher alone  0.82104
+  50/50 blend    0.82782
 ```
 
+Per label, rules to teacher: Lateral OA +0.135, Fracture +0.116, Medial OA
++0.116, Synovitis +0.098, Contusion +0.072, Medial Meniscus +0.068. ACL
+(-0.013) and Effusion (-0.006) are the only regressions, both inside noise at
+this sample size.
+
+Synovitis is the result worth noting. Step 1 named it in only 11.9% of reports
+while 47% of gold studies are positive, and the conclusion there was that no
+lexicon could recover a finding the report does not mention. The teacher lifted
+it from 0.657 to 0.755 by reading the language that co-occurs with it. That is
+self-training doing exactly the job it was added for.
+
 **Gates:**
-- Held-out rule AUC ≥ 0.93. Below that the model is not even reproducing the
-  rules, which means a tokenisation or truncation problem, not a data problem.
-- **Teacher gold AUC > rules-alone gold AUC.** This is the one that matters. If
-  self-training does not beat the lexicon it was trained from, it is adding
-  noise — lower `EPOCHS` to 2, or go improve `knee_text.py` and re-run step 1.
-- Do not tune on the gold number. At n=58 the difference between 0.82 and 0.85
-  is one study changing rank.
+- Held-out rule AUC >= 0.93. Below that the model is not reproducing the
+  lexicon on unseen reports, which is a tokenisation or truncation problem.
+- **Teacher gold AUC > rules-alone gold AUC**, both printed. If self-training
+  does not beat the lexicon it was trained from, it is adding noise - and it
+  did exactly that when the rule scores were fed in as features, because a
+  linear head then solves the task by copying them.
+- Do not tune on the gold number. The checkpoint saved is epoch 5, selected on
+  held-out rule AUC, even though gold peaked 0.003 higher at epoch 3 - that
+  difference is one study changing rank.
 
 Publish the output; step 4 finds `study_targets.parquet` by glob.
 

@@ -283,13 +283,24 @@ RULE_P = train[rule_cols].values.astype(np.float32)
 BLEND = 0.5 * RULE_P + 0.5 * SOFT
 
 print("\ngold-study macro AUC of each candidate target:")
+_scores = {}
 for name, P in [("rules alone", RULE_P), ("teacher alone", SOFT),
                 ("50/50 blend", BLEND)]:
     m, _ = kc.macro_auc(train[kc.LABELS].fillna(0.0).values.astype(np.float32),
                         P, mask=GOLD)
+    _scores[name] = m
     print(f"  {name:<14s} {m:.5f}")
-print(f"  n={int(gold_rows.sum())}: these are within noise of each other. The "
-      f"blend is the hedge, not the winner.")
+_gap = _scores["teacher alone"] - _scores["rules alone"]
+print(f"  teacher - rules = {_gap:+.5f}")
+if _gap > 0.02:
+    print(f"  Self-training earned its place: the teacher reads phrasings the "
+          f"lexicon never matched.")
+else:
+    print(f"  Too close to call at n={int(gold_rows.sum())}. If the teacher is "
+          f"not clearly ahead, prefer the rules - a simpler pipeline that is "
+          f"honestly no worse beats a sophisticated one that is.")
+print(f"  The blend is kept regardless: the two fail differently, and its "
+      f"weight was never tuned on these {int(gold_rows.sum())} studies.")
 
 # Gold wins wherever it exists; the blend fills every other cell.
 GOLD_VALS = train[kc.LABELS].fillna(0.0).values.astype(np.float32)
