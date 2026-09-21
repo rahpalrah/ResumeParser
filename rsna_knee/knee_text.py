@@ -131,7 +131,9 @@ ANATOMY = {
                   r"knochenmarkodem|edema midollare|medullar\w* edema|marrow oedema|"
                   r"kemik iligi odem\w*|kontuzyon|kemik odem\w*|kostan\w* edem\w*|edem kosti|"
                   r"botoedeem|beenmergoedeem|"
-                  r"kostan\w* kontuzij\w*|οιδημα (του )?μυελου|"
+                  r"kostan\w* kontuzij\w*|"
+                  r"οιδημα\w*( του)?( οστικου)? μυελου|οστεομυελικ\w* οιδημα\w*|"
+                  r"μυελικ\w* οιδημα\w*|οστικ\w* μωλωπ\w*|"
                   r"костномозъчен едем|костно-?мозъчен оток|"
                   r"отек костного мозга|контузи\w*|трабекулярн\w* отек)"),
     "Fracture": (r"(fracture|fractura|frattura|fraktur|kirik|avulsion|avulsiyon|"
