@@ -148,11 +148,23 @@ for name, sel in [("cyrillic", CYR), ("turkish", TRK), ("other", OTH)]:
         print(f"   {lab:<18s} {cov:6.1%}")
 
 # --- CELL 5 -----------------------------------------------------------------
-# Reports where a structure that essentially every knee MRI comments on was not
-# matched at all.  These are the exact phrasings to add to knee_text.py.
-PROBE = "ACL"          # try also "Medial Meniscus", "Effusion"
-miss = train[~train["rep"].str.contains(ANATOMY[PROBE], regex=True)]
-print(f"{len(miss):,} reports never mention {PROBE} by any pattern "
-      f"({len(miss)/len(train):.1%})\n")
-for t in miss["rep"].sample(min(6, len(miss)), random_state=0):
-    print(t[:400].strip(), "\n" + "-" * 70)
+# Read the reports the lexicon cannot see.  Guessing medical vocabulary from
+# memory is how a pattern like \bmm\b gets written; this prints the actual
+# sentences so the terminology list is copied, not invented.
+BUCKET = "cyrillic"     # "cyrillic" | "turkish" | "other" | "all"
+PROBE = "ACL"           # structure that must be missing; None = any report
+N_SHOW = 6
+CHARS = 500
+
+sel = {"cyrillic": CYR, "turkish": TRK, "other": OTH,
+       "all": pd.Series(True, index=train.index)}[BUCKET]
+if PROBE:
+    sel = sel & ~train["rep"].str.contains(ANATOMY[PROBE], regex=True)
+
+sub = train[sel]
+print(f"{BUCKET}: {len(sub):,} reports"
+      + (f" with no {PROBE} match" if PROBE else ""))
+if len(sub):
+    for t in sub["rep"].sample(min(N_SHOW, len(sub)), random_state=0):
+        print("\n" + "-" * 72)
+        print(t[:CHARS].strip())
