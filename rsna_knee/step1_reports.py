@@ -128,3 +128,31 @@ if prec:
     fn = np.where(sel & (R[:, wi] == 0) & (Y[:, wi] == 1))[0][:3]
     for j in fn:
         print("   ...", train.iloc[j]["rep"][:300], "\n")
+
+# --- CELL 4 -----------------------------------------------------------------
+# Where the lexicon still misses, by script.  Aggregate coverage hides which
+# language a gap belongs to, and a gap in a language is a terminology list
+# somebody has to write - so measure it directly and print the reports that
+# fall through.
+CYR = train["rep"].str.contains(r"[а-я]", regex=True)
+TRK = train["rep"].str.contains(r"\b(?:ve|ile|mevcut|izlen\w+|saptan\w+|eklem)\b",
+                                regex=True) & ~CYR
+OTH = ~CYR & ~TRK
+for name, sel in [("cyrillic", CYR), ("turkish", TRK), ("other", OTH)]:
+    n = int(sel.sum())
+    print(f"\n{name}: {n:,} reports ({n/len(train):.1%})")
+    if n == 0:
+        continue
+    for lab, pat in ANATOMY.items():
+        cov = train.loc[sel, "rep"].str.contains(pat, regex=True).mean()
+        print(f"   {lab:<18s} {cov:6.1%}")
+
+# --- CELL 5 -----------------------------------------------------------------
+# Reports where a structure that essentially every knee MRI comments on was not
+# matched at all.  These are the exact phrasings to add to knee_text.py.
+PROBE = "ACL"          # try also "Medial Meniscus", "Effusion"
+miss = train[~train["rep"].str.contains(ANATOMY[PROBE], regex=True)]
+print(f"{len(miss):,} reports never mention {PROBE} by any pattern "
+      f"({len(miss)/len(train):.1%})\n")
+for t in miss["rep"].sample(min(6, len(miss)), random_state=0):
+    print(t[:400].strip(), "\n" + "-" * 70)

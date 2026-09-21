@@ -55,6 +55,11 @@ LEXICON_CASES = [
     # over the 4,407 reports puts English at 38%, Romance ~21%, Turkish ~12%,
     # German ~9%, Russian ~5%. Turkish is verb-final, so its negation follows
     # the finding; Russian uses both orders.
+    # Abbreviation collisions: mm is millimetres in every language, and a
+    # measurement must never be read as a medial meniscus.
+    ('Baker cyst measuring 25 mm. No other abnormality.',
+     {"Baker's"}, {'Medial Meniscus', 'Lateral Meniscus'}),
+    ('Joint effusion, 12 mm deep.', {'Effusion'}, {'Medial Meniscus', 'Lateral Meniscus'}),
     ('Complete tear of the anterior cruciate ligament. Small joint effusion.',
      {'Effusion', 'ACL'}, {'MCL', 'Fracture'}),
     ('ACL intact. Menisci intact. No fracture. Unremarkable study.',

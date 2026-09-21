@@ -19,6 +19,12 @@ zero matches rather than an error:
     therefore written in post-normalisation form, and selftest.py asserts that
     no pattern contains a character norm_text would alter.
 
+Abbreviations are deliberately absent where they collide with ordinary report
+vocabulary. "MM" and "LM" for the menisci are the obvious trap: `\bmm\b`
+matches every measurement in millimetres, which is most reports in every
+language, and it held meniscus coverage at a flat 57% that no added
+terminology could move.
+
 The rules are not the final labeller. They are a precise, sparse signal that
 step 2 self-trains from, so precision is worth far more than recall here.
 """
@@ -55,13 +61,11 @@ ANATOMY = {
     "Medial Meniscus": (r"((menisc|menisk|menisq)\w*\s+(medial|intern|mediale)|"
                         r"(medial|intern|mediale[ns]?)\s+(menisc|menisk|menisq)\w*|"
                         r"ic menisk\w*|menisk\w* medial|"
-                        r"(медиальн\w*|внутренн\w*) мениск\w*|мениск\w* (медиальн|внутренн)\w*|"
-                        r"\bmm\b)"),
+                        r"(медиальн\w*|внутренн\w*) мениск\w*|мениск\w* (медиальн|внутренн)\w*)"),
     "Lateral Meniscus": (r"((menisc|menisk|menisq)\w*\s+(lateral|extern|laterale)|"
                          r"(lateral|extern|laterale[ns]?)\s+(menisc|menisk|menisq)\w*|"
                          r"dis menisk\w*|menisk\w* lateral|"
-                         r"(латеральн\w*|наружн\w*) мениск\w*|мениск\w* (латеральн|наружн)\w*|"
-                         r"\blm\b)"),
+                         r"(латеральн\w*|наружн\w*) мениск\w*|мениск\w* (латеральн|наружн)\w*)"),
     "Medial OA": (r"((compartiment|compartment|kompartiment|kompartman)\w*\s+(medial|intern|ic)|"
                   r"(medial|intern)\w*\s+(compartment|compartiment|kompartiment|kompartman)|"
                   r"femorotibial (medial|intern)|medial tibiofemoral|medial joint|"
