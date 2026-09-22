@@ -141,24 +141,41 @@ def make_grad_scaler(device: str = "cuda"):
         return torch.cuda.amp.GradScaler()
 
 
-def find_inputs(name: str, root: str = "/kaggle/input", max_depth: int = 4) -> List[str]:
-    """Every attached file matching `name`, searched several levels deep.
+def find_inputs(name: str, root: str = "/kaggle/input", max_depth: int = 8) -> List[str]:
+    """Every attached file or directory matching `name`, at any depth.
 
-    Kaggle does not mount everything at one depth. A competition lands at
-    /kaggle/input/competitions/<slug>/, while a dataset can land at
-    /kaggle/input/<slug>/ or /kaggle/input/datasets/<owner>/<slug>/, and a
-    notebook output deeper still. A two-level glob silently finds nothing in
-    the nested layout, so search a range of depths instead of assuming one.
+    Kaggle mounts things at depths that vary by kind: a competition at
+    /kaggle/input/competitions/<slug>/, a dataset at /kaggle/input/<slug>/ or
+    /kaggle/input/datasets/<owner>/<slug>/, and a NOTEBOOK OUTPUT under
+    /kaggle/input/notebooks/<user>/<notebook>/... deeper still. Globbing a
+    fixed set of depths finds nothing the moment the layout is one level past
+    whatever was guessed, so walk instead.
+
+    The walk prunes the DICOM trees. train_series holds ~820,000 files across
+    tens of thousands of directories, and descending into it to look for a
+    parquet would take minutes and find nothing.
     """
-    hits: List[str] = []
-    for d in range(1, max_depth + 1):
-        hits += glob.glob(os.path.join(root, *(["*"] * d), name))
-    seen, out = set(), []
-    for h in sorted(hits):
-        if h not in seen:
-            seen.add(h)
-            out.append(h)
-    return out
+    import fnmatch
+
+    skip = {"train_series", "test_series", ".git", "__pycache__"}
+    out: List[str] = []
+    frontier = [(root, 0)]
+    while frontier:
+        d, depth = frontier.pop()
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            continue
+        for e in entries:
+            matched = fnmatch.fnmatch(e.name, name)
+            if matched:
+                out.append(e.path)
+            # Do not descend into a directory that already matched, nor into
+            # the DICOM trees, nor past the depth cap.
+            if (e.is_dir() and not matched and depth + 1 <= max_depth
+                    and e.name not in skip):
+                frontier.append((e.path, depth + 1))
+    return sorted(set(out))
 
 
 def find_comp_dir(root: str = "/kaggle/input", marker: str = "sample_submission.csv",

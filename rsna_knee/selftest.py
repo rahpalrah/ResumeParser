@@ -11,6 +11,7 @@ import math
 import os
 import shutil
 import tempfile
+import time
 
 import numpy as np
 import pandas as pd
@@ -450,6 +451,36 @@ def main():
             print("[9c] MultiCache redirect resolves without recursing")
         finally:
             kc.sprite_path = _orig
+
+        # Kaggle mounts a notebook output at
+        # /kaggle/input/notebooks/<user>/<notebook>/output/..., and inserts a
+        # version level for some attachments. Discovery that only globs a
+        # handful of fixed depths reports "not attached" for a cache that is
+        # sitting right there - which is how step 4 died on its first run.
+        fake_in = os.path.join(tmp, "fake_input")
+        deep = os.path.join(fake_in, "notebooks", "someuser", "knee-step3",
+                            "versions", "3", "output")
+        os.makedirs(os.path.join(deep, "cache", "ab"))
+        open(os.path.join(deep, "cache", "ab", "s__t.jpg"), "w").close()
+        open(os.path.join(deep, "series_meta_train_shard0.parquet"), "w").close()
+        # The DICOM tree must be pruned, not walked: it holds ~820,000 files.
+        big = os.path.join(fake_in, "competitions", "knee", "train_series")
+        for i in range(200):
+            os.makedirs(os.path.join(big, f"study{i}", "series0"))
+        open(os.path.join(fake_in, "competitions", "knee",
+                          "sample_submission.csv"), "w").close()
+
+        t0 = time.time()
+        found = kc.find_inputs("cache", root=fake_in)
+        shards = kc.find_inputs("series_meta_train_shard*.parquet", root=fake_in)
+        dt = time.time() - t0
+        assert len(found) == 1 and found[0].endswith("output/cache"), found
+        assert len(shards) == 1, shards
+        # Descending into the pruned tree would return its 200 series dirs too.
+        assert not any("train_series" in h for h in found + shards)
+        assert dt < 5.0, f"discovery walked the DICOM tree ({dt:.1f}s)"
+        print(f"[9d] discovery finds a 6-deep notebook output in {dt*1000:.0f}ms, "
+              f"DICOM tree pruned")
 
 
         # metric + rank normalisation

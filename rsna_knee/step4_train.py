@@ -97,14 +97,58 @@ def _find_all(name):
             seen.add(h); out.append(h)
     return out
 
-CACHE_DIRS = [d for d in _find_all("cache") if os.path.isdir(d)]
+def _looks_like_sprite_cache(d):
+    """A cache/ that holds no sprite is somebody else's cache/, not step 3's."""
+    for sub in sorted(os.listdir(d))[:8]:
+        q = os.path.join(d, sub)
+        if os.path.isdir(q) and any(f.endswith(".jpg") for f in os.listdir(q)[:8]):
+            return True
+    return False
+
+CACHE_DIRS = [d for d in _find_all("cache")
+              if os.path.isdir(d) and _looks_like_sprite_cache(d)]
 META_SHARDS = _find_all("series_meta_train_shard*.parquet")
 _t = _find_all("study_targets.parquet")
 
 def _explain(what, where):
-    print(f"\n{what} not found. Attached inputs:")
-    for d in sorted(glob.glob("/kaggle/input/*")) + sorted(glob.glob("/kaggle/input/*/*")):
-        print("   ", d)
+    """Print what IS attached, deep enough to be useful.
+
+    Kaggle buries a notebook output several levels down, so a two-level
+    listing shows only /kaggle/input/notebooks/<user> and leaves you unable
+    to tell an unattached output from a misnamed one.
+    """
+    print(f"\n{what} not found. This is what is attached:")
+
+    def walk(d, depth, prefix):
+        if depth > 6:
+            return
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: (not e.is_dir(), e.name))
+        except OSError:
+            return
+        dirs = [e for e in entries if e.is_dir()]
+        files = [e for e in entries if not e.is_dir()]
+        for e in dirs[:12]:
+            n = 0
+            try:
+                n = len(os.listdir(e.path))
+            except OSError:
+                pass
+            print(f"{prefix}{e.name}/  ({n} entries)")
+            # The DICOM trees are tens of thousands of directories deep in
+            # count; naming them once is all the diagnostic needs.
+            if e.name not in ("train_series", "test_series", "cache"):
+                walk(e.path, depth + 1, prefix + "    ")
+        if len(dirs) > 12:
+            print(f"{prefix}... {len(dirs) - 12} more directories")
+        for e in files[:8]:
+            print(f"{prefix}{e.name}")
+        if len(files) > 8:
+            print(f"{prefix}... {len(files) - 8} more files")
+
+    walk("/kaggle/input", 0, "    ")
+    print("    /kaggle/working/")
+    walk(OUT, 5, "        ")
     raise FileNotFoundError(f"{what} is missing - {where}")
 
 if not CACHE_DIRS:
